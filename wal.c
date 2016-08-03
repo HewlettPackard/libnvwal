@@ -9,28 +9,31 @@
 /* 32MB sounds like a good place to start? */
 #define NV_SEG_SIZE (1 << 25)
 
-#define ASSERT_FD_VALID(fd)                          \
-  do {                                               \
-    if(fd < 0) {                                     \
-      perror( "Invalid fd in "                       \
-              __FUNCTION__ ":" __LINE__ " ");        \
-      exit(-1);                                      \
-    }                                                \
-  } while(0)
+/* Number of empty log files to create at a time (minimize directory fsync) */
+#define PREALLOC_FILE_COUNT 100
 
-#define ASSERT_NO_ERROR(err)                                         \
-  do {                                                               \
-    if(err) {                                                        \
-      perror( "Error in " __FUNCTION__ ":" __LINE__ " :");           \
-      exit(-1);                                                      \
-    }                                                                \
-  } while(0)
+#define ASSERT_FD_VALID(fd)                             \
+    do {                                                \
+        if(fd < 0) {                                    \
+            perror( "Invalid fd in "                    \
+                    __FUNCTION__ ":" __LINE__ " ");     \
+            exit(-1);                                   \
+        }                                               \
+    } while(0)
 
-#define POINTER_AHEAD(ptr1, ptr2, start, size)       \
-    (((start) <= (ptr1) ? (ptr1)-(start) : (ptr1)+(size)-(start)) > \
+#define ASSERT_NO_ERROR(err)                                            \
+    do {                                                                \
+        if(err) {                                                       \
+            perror( "Error in " __FUNCTION__ ":" __LINE__ " :");        \
+            exit(-1);                                                   \
+        }                                                               \
+    } while(0)
+
+#define POINTER_AHEAD(ptr1, ptr2, start, size)                          \
+    (((start) <= (ptr1) ? (ptr1)-(start) : (ptr1)+(size)-(start)) >     \
      ((start) <= (ptr2) ? (ptr2)-(start) : (ptr2)+(size)-(start)))
 
-#define CIRCULAR_SIZE(start, end, size)  \
+#define CIRCULAR_SIZE(start, end, size)                         \
     ((start) <= (end) ? (end)-(start) : (end)+(size)-(start))
 
 WD * initialize_nvwal(int numa_domain,
@@ -150,9 +153,9 @@ void process_one_writer(WD * wal, WInfo * winfo)
         
         len = MIN(MIN(total_length,nvseg_remaining),writer_length);
         
-        pmem_memcpy(wal->cur_region+nv_offset, copied, len);
+        pmem_memcpy_nodrain(wal->cur_region+nv_offset, copied, len);
 
-        // Record some metadata here...
+        // Record some metadata here?
         
         // Update pointers
         copied += len;
@@ -167,15 +170,15 @@ void process_one_writer(WD * wal, WInfo * winfo)
         assert(wal->nv_offset <= NV_SEG_SIZE);
         if(wal->nv_offset == NV_SEG_SIZE) {
             
-            log_segment * cur_segment = wal->segment[wal->cur_segment];
-            int next_seg_idx = wal->cur_segment + 1 % wal->num_segments;
+            log_segment * cur_segment = wal->segment[wal->cur_seg_idx];
+            int next_seg_idx = wal->cur_seg_idx + 1 % wal->num_segments;
             log_segment * next_segment = wal->segment[next_seg_idx];
 
             /* Transition current active segment to complete */
-                    
+
             cur_segment->state = SEG_COMPLETE;
             submit_write(cur_segment);
-                    
+
             /* Transition next segment to active */
             if(next_segment->state != SEG_UNUSED) {
                 /* Should be at least submitted */
@@ -199,7 +202,7 @@ void process_one_writer(WD * wal, WInfo * winfo)
              * just pull an already-open descriptor out of a pool. */
             allocate_backing_file(cur_segment);
 
-            wal->cur_segment = next_seg_idx;
+            wal->cur_seg_idx = next_seg_idx;
             wal->cur_region = cur_segment->nv_baseaddr;
             wal->nv_offset = 0;
 
@@ -230,14 +233,28 @@ void * flusher_thread_main(void * arg)
         int found_work = 0;
         
         do {
+
             found_work = process_one_writer(wal, cur_winfo);
+
             cur_winfo = cur_winfo->next;
+
         } while (cur_winfo != wal->writer_list);
-        
+
+        /* Ensure writes are durable in NVM */
+        pmem_drain();
+
+        /* Some kind of metadata commit, we could use libpmemlog.
+         * This needs to track which epochs are durable, what's on disk
+         * etc. */
+
+        //commit_metadata_updates(wal)
+
         // maybe wake sleeping writer threads?
-        
-            
-        
+
+        pthread_mutex_unlock(&wal->mutex);
+        //Needs a fair lock instead so waiting writers can be added
+        //or maybe even removed
+        pthread_mutex_lock(&wal->mutex);
     }
     pthread_mutex_unlock(&wal->mutex);
     return 0;
@@ -368,8 +385,8 @@ void submit_write(WD * wal, log_segment * seg)
      * begin_segment_write or so. */
     
     bytes_written = write(seg->disk_fd,
-                              seg->nv_baseaddr,
-                              NV_SEG_SIZE);
+                          seg->nv_baseaddr,
+                          NV_SEG_SIZE);
 
     ASSERT_NO_ERROR(bytes_written != NV_SEG_SIZE);
 
@@ -405,5 +422,46 @@ void sync_backing_file(WD * wal, log_segment * seg) {
 
 void allocate_backing_file(WD * wal, log_segment * seg)
 {
+    size_t our_sequence = wal->log_sequence++;
+    int our_fd = -1;
+    int i = 0;
+    char filename[256];
+
+    if(our_sequence % PREALLOC_FILE_COUNT == 0) {
+        for(i = our_sequence; i < our_sequence + PREALLOC_FILE_COUNT; i++) {
+            int fd;
+
+            snprintf(filename, "log-segment-%lu", i);
+            fd = openat(wal->log_root_fd,
+                        filename,
+                        O_CREAT|O_RDWR|O_TRUNC,
+                        S_IRUSR|S_IWUSR);
+
+            ASSERT_FD_VALID(fd);
+            /* Now would be a good time to hint to the FS using
+             * fallocate or whatever. */
+
+            /* Clean up */
+
+            /* We should really just stash these fds in a pool */
+            close(fd);
+
+        }
+
+        /* Sync the directory, so that all these newly created (empty)
+         * files are visible.
+         * We may want to take care of this in the fsync thread instead
+         * and set the dir_synced flag on the segment descriptor */
+        fsync(wal->log_root_fd);
+
+    }
+
+    /* The file should already exist */
+    snprintf(filename, "log-segment-%lu", our_sequence);
+    our_fd = openat(wal->log_root_fd,
+                    filename,
+                    O_RDWR|O_TRUNC);
+
+    ASSERT_FD_VALID(our_fd);
 
 }

@@ -8,14 +8,23 @@
 typedef unsigned long long epoch_t;
 typedef unsigned char byte;
 
+typedef enum {
+    SEG_UNUSED = 0,
+    SEG_ACTIVE,
+    SEG_COMPLETE,
+    SEG_SUBMITTED,
+    SEG_SYNCING,
+    SEG_SYNCED
+} seg_state_t;
+
 typedef struct log_segment {
-    unsigned long long seq;
+    void * nv_baseaddr;
+    unsigned long long seq; /* on-disk sequence number */
     int nvram_fd;
     int disk_fd;
-    void * nv_baseaddr;
-    int state;
-    int dir_synced;
-    size_t disk_offset;
+    seg_state_t state;
+    int dir_synced;   /* is direntry of disk_fd durable? */ 
+    size_t disk_offset; /* 0 for now. */
 }
     
 typedef struct wal_descriptor {
@@ -34,22 +43,23 @@ typedef struct wal_descriptor {
     size_t max_log_size; /* 0 if append-only log */
     size_t log_sequence; /* Where the next segment will be written */
 
-
     byte * cur_region;        /* mmapped address of current nv segment*/
     size_t nv_offset;         /* Index into nv_region */
-    int cur_segment;          /* Index into nv_descriptor & nv_baseaddr */
+    int cur_seg_idx;          /* Index into segment[] */
 
     pthread_mutex_t mutex;
     WInfo * writer_list;
+
 } WD;
 
 typedef struct buffer_control_block {
-    size_t buffer_size;
-    byte * buffer;
+    /* Updated by writer and read by flusher thread. */
     byte * tail; /* Where the writer will put new bytes */
     byte * head; /* Beginning of completely written bytes */
     byte * complete; /* End of completely written bytes */
     epoch_t latest_written;
+    size_t buffer_size;
+    byte * buffer;
 } BufCB;
 
 typedef struct writer_info {
