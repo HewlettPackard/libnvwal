@@ -46,6 +46,15 @@ enable_testing()
 include(CTest)
 
 
+set(WAL_SOURCE_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/wal.c
+  )
+
+add_library(nvwal-static STATIC ${WAL_SOURCE_FILES})
+add_library(nvwal-shared SHARED ${WAL_SOURCE_FILES})
+target_link_libraries(nvwal-static ${NUMA_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(nvwal-shared ${NUMA_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+
 add_subdirectory(test)
 
 #############################################################################
