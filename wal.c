@@ -12,7 +12,7 @@
 /* Number of empty log files to create at a time (minimize directory fsync) */
 #define PREALLOC_FILE_COUNT 100
 
-#define ASSERT_FD_VALID(fd)                             \
+#define CHECK_FD_VALID(fd)                             \
     do {                                                \
         if(fd < 0) {                                    \
             perror( "Invalid fd in "                    \
@@ -21,7 +21,7 @@
         }                                               \
     } while(0)
 
-#define ASSERT_NO_ERROR(err)                                            \
+#define CHECK_NO_ERROR(err)                                            \
     do {                                                                \
         if(err) {                                                       \
             perror( "Error in " __FUNCTION__ ":" __LINE__ " :");        \
@@ -43,59 +43,59 @@ WD * initialize_nvwal(int numa_domain,
                       int circular_log
                       )
 {
-    
+
     WD * wal;
     int nv_root_fd;
     int block_root_fd;
     unsigned long long i;
     struct stat file_stats;
-    
+
     wal = malloc(sizeof *wal);
     memset(wal, 0, sizeof(*wal));
-   
+
     pthread_mutex_init(&wal->mutex, 0);
-    
-    wal->log_root = strdup(log_path);   
+
+    wal->log_root = strdup(log_path);
     if(circular_log) {
         fprintf(stderr, "Circular log not supported\n");
         exit(-1);
     } else {
         wal->max_log_size = 0;
-                                         
+
         wal->log_descriptor = malloc(sizeof(int) * wal->num_segments);
         memset(wal->log_descriptor, -1, sizeof(int) * wal->num_segments);
-   
+
     }
 
     wal->nv_root = strdup(nv_root);
     wal->nv_quota = nv_quota;
     wal->num_segments = nv_quota / NV_SEG_SIZE;
-    
+
     if(nv_quota < 2*NV_SEG_SIZE) {
         fprintf(stderr,
                 "Error: nv_quota less than 2*NV_SEG_SIZE (%lu)\n",
                 2*NV_SEG_SIZE);
         exit(-1);
     }
-       
+
     wal->nv_descriptor = malloc(sizeof(int) * wal->num_segments);
     memset(wal->nv_descriptor, -1, sizeof(int) * wal->num_segments);
     wal->nv_baseaddr = malloc(sizeof(void *) * wal->num_segments);
     memset(wal->nv_baseaddr, 0, sizeof(void *) * wal->num_segments);
-    
+
     nv_root_fd = open(nv_root, O_DIRECTORY|O_RDONLY);
     ASSERT_FD_VALID(nv_root_fd);
     block_root_fd = open(secondary_root, O_DIRECTORY|O_RDONLY);
     ASSERT_FD_VALID(block_root_fd);
-    
+
     /* Initialize all nv segments */
-    
+
     for(i = 0; i < wal->num_segments; i++) {
-        
+
         init_nvram_segment(wal, nv_root_fd, i);
-        
+
     }
-    
+
     /* Created the files, fsync parent directory */
     fsync(nv_root_fd);
 
@@ -104,7 +104,7 @@ WD * initialize_nvwal(int numa_domain,
     /*
      * Set up some flusher thread stuff?
      */
-    
+
     return wal;
 }
 
@@ -127,7 +127,7 @@ WInfo * register_writer(WD * wal, BufCB write_buffer)
         new_writer->next = wal->writer_list->next;
         wal->writer_list->next = new_writer;
     }
-    
+
     pthread_mutex_unlock(&wal->mutex);
 }
 
@@ -139,24 +139,24 @@ void process_one_writer(WD * wal, WInfo * winfo)
     byte * end = cur_winfo->writer->buffer + size;
     size_t len;
     int found_work = 0;
-    
+
     // If they are not equal, there's work to do since complete
     // cannot be behind copied
-    
+
     while(complete != copied) {
         found_work = 1;
-        
+
         // Figure out how much we can copy linearly
         total_length = circular_size(copied, complete, size);
         nvseg_remaining = NV_SEG_SIZE - wal->nv_offset;
         writer_length = end - copied;
-        
+
         len = MIN(MIN(total_length,nvseg_remaining),writer_length);
-        
+
         pmem_memcpy_nodrain(wal->cur_region+nv_offset, copied, len);
 
         // Record some metadata here?
-        
+
         // Update pointers
         copied += len;
         assert(copied <= end);
@@ -164,18 +164,18 @@ void process_one_writer(WD * wal, WInfo * winfo)
             // wrap around
             copied = cur_winfo->writer->buffer;
         }
-                
+
         wal->nv_offset += len;
 
         assert(wal->nv_offset <= NV_SEG_SIZE);
         if(wal->nv_offset == NV_SEG_SIZE) {
-            
+
             log_segment * cur_segment = wal->segment[wal->cur_seg_idx];
             int next_seg_idx = wal->cur_seg_idx + 1 % wal->num_segments;
             log_segment * next_segment = wal->segment[next_seg_idx];
 
             /* Transition current active segment to complete */
-
+            assert(cur_segment->state == SEG_ACTIVE);
             cur_segment->state = SEG_COMPLETE;
             submit_write(cur_segment);
 
@@ -186,7 +186,7 @@ void process_one_writer(WD * wal, WInfo * winfo)
                 if(wal->flags & BG_FSYNC_THREAD) {
                     /* spin or sleep waiting for completion */
                 } else {
-                    sync_backing_file(next_segment);
+                    sync_backing_file(wal, next_segment);
                 }
                 assert(next_segment->state == SEG_UNUSED);
             }
@@ -207,10 +207,10 @@ void process_one_writer(WD * wal, WInfo * winfo)
             wal->nv_offset = 0;
 
             cur_segment->state = SEG_ACTIVE;
-            
+
         }
     }
-    
+
     return found_work;
 }
 
@@ -225,13 +225,13 @@ void * flusher_thread_main(void * arg)
         pthread_mutex_unlock(&wal->mutex);
         pthread_exit(0);
     }
- 
+
     while(1) {
- 
+
         /* Look for work */
         WInfo * cur_winfo = wal->writer_list;
         int found_work = 0;
-        
+
         do {
 
             found_work = process_one_writer(wal, cur_winfo);
@@ -260,6 +260,22 @@ void * flusher_thread_main(void * arg)
     return 0;
 }
 
+void * fsync_thread_main(void * arg)
+{
+    WD * wal = arg;
+
+    while(1) {
+        int i;
+        int found_work = 0;
+
+        for(i = 0; i < wal->num_segments; i++) {
+            if(wal->segments[i].state == SEG_SUBMITTED) {
+                sync_backing_file(wal, &wal->segments[i]);
+            }
+        }
+    }
+}
+
 error_t on_wal_write(WD* wal,
                      WInfo * winfo,
                      byte * src,
@@ -271,7 +287,7 @@ error_t on_wal_write(WD* wal,
  * Very simple version which does not allow gaps in the volatile log
  * and does not check possible invariant violations e.g. tail-catching
  */
-   
+
 {
     if(src != winfo->writer->complete) {
         fprintf(stderr, "Error: src %p complete %p\n",
@@ -285,7 +301,7 @@ error_t on_wal_write(WD* wal,
      * is getting ahead of our durability horizon? */
     assert(winfo->writer->latest_written <= current);
     winfo->writer->latest_written = current;
-    
+
     /* Bump complete pointer and wrap around if necessary */
     complete = complete + size;
     if(complete >= winfo->writer->buffer + winfo->writer->buffer_size) {
@@ -303,7 +319,7 @@ error_t assure_wal_space(WD * wal, WInfo * writer, size_t size)
       check size > circular_size(tail, head, size). Note the reversal
       of the usual parameter ordering, since we're looking for *free*
       space in the log. We could also consider circular_size(tail, durable).
-            
+
       if it's bad, we probably want to do something like:
       check
       busy wait
@@ -319,23 +335,23 @@ error_t assure_wal_space(WD * wal, WInfo * writer, size_t size)
 
 void init_nvram_segment(WD * wal, int root_fd, int i)
 {
-    
+
     log_segment * seg = &wal->segment[i];
     int fd;
     char filename[256];
     void * baseaddr;
-    
+
     snprintf(filename, "nvwal-data-%lu", i);
     fd = openat(root_fd, filename, O_CREAT|O_RDWR);
     ASSERT_FD_VALID(fd);
-        
+
     //posix_fallocate doesn't set errno, do it ourselves
     errno = posix_fallocate(fd, 0, NV_SEG_SIZE);
     ASSERT_NO_ERROR(err);
     err = ftruncate(fd, NV_SEG_SIZE);
     ASSERT_NO_ERROR(err);
     fsync(fd);
-    
+
     /* First try for a hugetlb mapping */
     baseaddr = mmap(0,
                     NV_SEG_SIZE,
@@ -343,9 +359,9 @@ void init_nvram_segment(WD * wal, int root_fd, int i)
                     MAP_SHARED|MAP_PREALLOCATE|MAP_HUGETLB
                     fd,
                     0);
-    
+
     if(baseaddr == MAP_FAILED && errno == EINVAL) {
-        
+
         /* If that didn't work, try for a non-hugetlb mapping */
         printf(stderr, "Failed hugetlb mapping\n");
         baseaddr = mmap(0,
@@ -357,10 +373,10 @@ void init_nvram_segment(WD * wal, int root_fd, int i)
     }
     /* If that didn't work then bail. */
     ASSERT_NO_ERROR(baseaddr == MAP_FAILED);
-    
+
     /* Even with fallocate we don't trust the metadata to be stable
      * enough for userspace durability. Actually write some bytes! */
-    
+
     memset(baseaddr, 0x42, NV_SEG_SIZE);
     msync(fd);
 
@@ -368,7 +384,7 @@ void init_nvram_segment(WD * wal, int root_fd, int i)
     seg->nvram_fd = fd;
     seg->disk_fd = -1;
     seg->nv_baseaddr = baseaddr;
-    seg->state = NV_STATE_UNUSED;
+    seg->state = SEG_UNUSED;
     seg->dir_synced = 0;
     seg->disk_offset = 0;
 
@@ -383,7 +399,7 @@ void submit_write(WD * wal, log_segment * seg)
     /* kick off write of old segment
      * This should be wrapped up in some function,
      * begin_segment_write or so. */
-    
+
     bytes_written = write(seg->disk_fd,
                           seg->nv_baseaddr,
                           NV_SEG_SIZE);
@@ -397,16 +413,16 @@ void submit_write(WD * wal, log_segment * seg)
 void sync_backing_file(WD * wal, log_segment * seg) {
 
     assert(seg->state >= SEG_SUBMITTED);
-    
+
     /* kick off the fsync ourselves */
     seg->state = SEG_SYNCING;
     fsync(seg->disk_fd);
-    
+
     /* check file's dirfsync status, should be
      * guaranteed in this model */
     assert(seg->dir_synced);
     seg->state = SEG_SYNCED;
-    
+
     /* Update durable epoch marker? */
 
     //wal->durable = seg->latest - 2;
