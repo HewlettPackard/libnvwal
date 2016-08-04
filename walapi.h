@@ -21,15 +21,15 @@ typedef enum {
 typedef struct log_segment {
     void * nv_baseaddr;
 
-    /* On-disk sequence number, identifies filename */
+    /** On-disk sequence number, identifies filename */
     unsigned long long seq;
     int nvram_fd;
     int disk_fd;
 
-    /* May be used for communication between flusher thread and fsync thread */
+    /** May be used for communication between flusher thread and fsync thread */
     seg_state_t state;
 
-    /* true if direntry of disk_fd is durable */
+    /** true if direntry of disk_fd is durable */
     bool dir_synced;
 } log_segment;
 
@@ -44,33 +44,33 @@ typedef struct wal_descriptor {
 
     log_segment * segment;
 
-    /* Path to log on block storage */
+    /** Path to log on block storage */
     char * log_root;
     int log_root_fd;
 
-    /* 0 if append-only log */
+    /** 0 if append-only log */
     size_t max_log_size;
 
-    /* Next on-disk sequence number, see log_segment.seq  */
+    /** Next on-disk sequence number, see log_segment.seq  */
     size_t log_sequence;
 
-    /* mmapped address of current nv segment*/
+    /** mmapped address of current nv segment*/
     byte * cur_region;
 
-    /* Index into nv_region */
+    /** Index into nv_region */
     size_t nv_offset;
 
-    /* Index into segment[] */
+    /** Index into segment[] */
     int cur_seg_idx;
 
-    /* To protect writer list */
+    /** To protect writer list */
     pthread_mutex_t mutex;
     WInfo * writer_list;
 
 } WD;
 
 
-/*
+/**
  * These two structs, BufCB and WInfo (names subject to change) are used to
  * communicate between a writer thread and the flusher thread, keeping track of
  * the status of one writer's volatile buffer. The pointers follow this
@@ -97,44 +97,48 @@ typedef struct wal_descriptor {
  */
 
 typedef struct buffer_control_block {
-    /* Updated by writer via on_wal_write() and read by flusher thread.  */
+    /** Updated by writer via on_wal_write() and read by flusher thread.  */
 
-    /* Where the writer will put new bytes - we don't currently read this */
+    /** Where the writer will put new bytes - we don't currently read this */
     byte * tail;
 
-    /* Beginning of completely written bytes */
+    /** Beginning of completely written bytes */
     byte * head;
 
-    /* End of completely written bytes */
+    /** End of completely written bytes */
     byte * complete;
 
-    /* max of epochs seen by on_wal_write() */
+    /** max of epochs seen by on_wal_write() */
     epoch_t latest_written;
 
-    /* Size of (volatile) buffer. Do not change after registration! */
+    /** Size of (volatile) buffer. Do not change after registration! */
     size_t buffer_size;
 
-    /* Buffer of buffer_size bytes, allocated by application */
+    /** Buffer of buffer_size bytes, allocated by application */
     byte * buffer;
 } BufCB;
 
 typedef struct writer_info {
-    /* Updated by flusher, read by writer */
+    /** Updated by flusher, read by writer */
     struct writer_info * next;
     BufCB * writer;
 
-    /* Everything up to this point is durable. It is safe for the application
-     * to move the head up to this point. */
+    /**
+     * Everything up to this point is durable. It is safe for the application
+     * to move the head up to this point.
+     */
     byte * flushed;
 
-    /* Everything up to this point has been copied by the flusher thread but
-     * might not yet be durable */
+    /**
+     * Everything up to this point has been copied by the flusher thread but
+     * might not yet be durable
+     */
     byte * copied;
 
-    /* Pending work is everything between copied and writer->complete */
+    /** Pending work is everything between copied and writer->complete */
 } WInfo;
 
-/* Ignored. */
+/** Ignored. */
 enum NVWALConfigFlags {
     BG_FSYNC_THREAD = 1 << 0,
     MMAP_DISK_FILE  = 1 << 1,
@@ -145,17 +149,19 @@ typedef struct {
     char * nv_root;
     int numa_domain;
 
-    /* How big our nvram segments are */
+    /** How big our nvram segments are */
     size_t nv_seg_size;
     size_t nv_quota;
 
     char * log_path;
 
-    /* Assumed to be the same as nv_seg_size for now */
+    /** Assumed to be the same as nv_seg_size for now */
     size_t disk_seg_size;
 
-    /* How many on-disk log segments to create a time (empty files)
-     * This reduces the number of times we have to fsync() the directory */
+    /**
+     * How many on-disk log segments to create a time (empty files)
+     * This reduces the number of times we have to fsync() the directory
+     */
     int prealloc_file_count;
 
     int option_flags;
@@ -175,5 +181,5 @@ error_t on_wal_write(WD* wal,
 
 error_t assure_wal_space(WD * wal, WInfo * writer, size_t size);
 
-/* Is this needed? Or can we just read wal->durable? */
+/** Is this needed? Or can we just read wal->durable? */
 epoch_t query_durable_epoch(WD * wal);
