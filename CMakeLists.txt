@@ -48,7 +48,7 @@ include(CTest)
 
 
 set(WAL_SOURCE_FILES
-  ${CMAKE_CURRENT_SOURCE_DIR}/wal.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_api.c
   )
 
 add_library(nvwal-static STATIC ${WAL_SOURCE_FILES})
@@ -66,9 +66,9 @@ add_subdirectory(test)
 # Doxygen commands (not mandatory)
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
-  set(DOXYGEN_INCLUDE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+  set(DOXYGEN_INCLUDE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/include")
   set(DOXYGEN_LAYOUT "${CMAKE_CURRENT_SOURCE_DIR}/DoxygenLayout.xml")
-  set(DOXYGEN_TARGETS "${CMAKE_CURRENT_SOURCE_DIR}")
+  set(DOXYGEN_TARGETS "${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src")
 
   set(DOXYGEN_MAINPAGE_MARKDOWN "README.md")
 
