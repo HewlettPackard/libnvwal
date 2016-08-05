@@ -33,7 +33,8 @@ find_package(Threads REQUIRED)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11 -pthread -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -fno-pie -Wall")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fno-pie")
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# TODO, we should move all .h to /include. Now under surgery..
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 #############################################################################
 #
@@ -83,4 +84,3 @@ else(DOXYGEN_FOUND)
   add_custom_target(dox ${CMAKE_COMMAND} -E echo "Doxygen not found. No documents generated.")
   add_custom_target(browse-dox ${CMAKE_COMMAND} -E echo "Doxygen not found. No documents generated.")
 endif(DOXYGEN_FOUND)
-

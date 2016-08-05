@@ -1,9 +1,11 @@
 
-#include "walapi.h"
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "walapi.h"
+#include "nvwal_atomics.h"
 
 
 /* 32MB sounds like a good place to start? */
