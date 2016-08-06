@@ -21,6 +21,9 @@
  * @file nvwal_util.h
  * Internal and assorted macros/functions etc.
  * We should NOT have much here.
+ * @ingroup LIBNVWAL_INTERNAL
+ * @addtogroup LIBNVWAL_INTERNAL
+ * @{
  */
 
 #include <errno.h>
@@ -54,5 +57,7 @@
 
 #define CIRCULAR_SIZE(start, end, size)                         \
     ((start) <= (end) ? (end)-(start) : (end)+(size)-(start))
+
+/** @} */
 
 #endif  // NVWAL_UTIL_H_

@@ -28,6 +28,9 @@
  * So far, we don't have the non-C11 implementation yet.
  * We simply forward to stdatomic.h.
  * @see http://en.cppreference.com/w/c/atomic
+ * @ingroup LIBNVWAL_INTERNAL
+ * @addtogroup LIBNVWAL_INTERNAL
+ * @{
  */
 
 #ifdef __STDC_NO_ATOMICS__  // we should also check STDC version. later, later..
@@ -86,4 +89,7 @@ typedef memory_order nvwal_memory_order;
 #define nvwal_atomic_thread_fence(ORD) atomic_thread_fence(ORD)
 
 #endif  // __STDC_NO_ATOMICS__
+
+/** @} */
+
 #endif  // NVWAL_ATOMICS_H_

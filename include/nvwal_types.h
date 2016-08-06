@@ -20,6 +20,9 @@
 /**
  * @file nvwal_types.h
  * Provides typedefs/enums/structs used in libnvwal.
+ * @ingroup LIBNVWAL
+ * @addtogroup LIBNVWAL
+ * @{
  */
 
 #include <stdbool.h>
@@ -31,6 +34,8 @@
 typedef uint64_t  nvwal_epoch_t;
 /** DESCRIBE ME */
 typedef int32_t   nvwal_error_t;
+/** DESCRIBE ME */
+typedef int8_t    nvwal_byte_t;
 
 /** DESCRIBE ME */
 enum nvwal_seg_state_t {
@@ -46,7 +51,8 @@ enum nvwal_seg_state_t {
  * @brief Represents a context of \b one stream of write-ahead-log placed in
  * NVDIMM and secondary device.
  * @details
- * Each
+ * Each nvwal_context instance must be initialized by nvwal_init() and cleaned up by
+ * nvwal_uninit().
  * Client programs that do distributed logging will instantiate
  * an arbitrary number of this context, one for each log stream.
  * There is no interection between two nvwal_context from libnvwal's standpoint.
@@ -86,7 +92,7 @@ struct nvwal_context {
 
 /** DESCRIBE ME */
 struct nvwal_log_segment {
-  void * nv_baseaddr;
+  nvwal_byte_t* nv_baseaddr;
 
   /** On-disk sequence number, identifies filename */
   uint64_t seq;
@@ -126,16 +132,16 @@ struct nvwal_log_segment {
  *
  */
 struct nvwal_buffer_control_block {
-  /** Updated by writer via on_wal_write() and read by flusher thread.  */
+  /** Updated by writer via nvwal_on_wal_write() and read by flusher thread.  */
 
   /** Where the writer will put new bytes - we don't currently read this */
-  void* tail;
+  nvwal_byte_t* tail;
 
   /** Beginning of completely written bytes */
-  void* head;
+  nvwal_byte_t* head;
 
   /** End of completely written bytes */
-  void* complete;
+  nvwal_byte_t* complete;
 
   /** max of epochs seen by on_wal_write() */
   nvwal_epoch_t latest_written;
@@ -144,7 +150,7 @@ struct nvwal_buffer_control_block {
   uint64_t buffer_size;
 
   /** Buffer of buffer_size bytes, allocated by application */
-  void* buffer;
+  nvwal_byte_t* buffer;
 };
 
 /** DESCRIBE ME */
@@ -157,13 +163,13 @@ struct nvwal_writer_info {
     * Everything up to this point is durable. It is safe for the application
     * to move the head up to this point.
     */
-  void* flushed;
+  nvwal_byte_t* flushed;
 
   /**
     * Everything up to this point has been copied by the flusher thread but
     * might not yet be durable
     */
-  void* copied;
+  nvwal_byte_t* copied;
 
   /** Pending work is everything between copied and writer->complete */
 };
@@ -197,5 +203,7 @@ struct nvwal_config {
 
   int option_flags;
 };
+
+/** @} */
 
 #endif  // NVWAL_TYPES_H_

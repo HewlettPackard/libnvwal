@@ -20,6 +20,9 @@
 /**
  * @file nvwal_api.h
  * Function interface to a simple WAL facility optimized for NVDIMM.
+ * @ingroup LIBNVWAL
+ * @addtogroup LIBNVWAL
+ * @{
  */
 
 #include "nvwal_fwd.h"
@@ -58,7 +61,7 @@ nvwal_error_t nvwal_register_writer(
 nvwal_error_t nvwal_on_wal_write(
   struct nvwal_context* wal_context,
   struct nvwal_writer_info* wal_writer,
-  const void* src,
+  const nvwal_byte_t* src,
   uint64_t size_to_write,
   nvwal_epoch_t current);
 
@@ -73,5 +76,7 @@ nvwal_error_t nvwal_assure_wal_space(
 /** Is this needed? Or can we just read wal->durable? */
 nvwal_error_t nvwal_query_durable_epoch(
   struct nvwal_context* wal_context);
+
+/** @} */
 
 #endif  // NVWAL_API_H_
