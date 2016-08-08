@@ -30,37 +30,50 @@
 
 /**
  * DESCRIBE ME.
- * @param[in] wal_config DESCRIBE ME
- * @param[out] wal_context DESCRIBE ME
+ * @param[in] config DESCRIBE ME
+ * @param[out] wal DESCRIBE ME
  */
 nvwal_error_t nvwal_init(
-  const struct nvwal_config* wal_config,
-  struct nvwal_context* wal_context);
+  const struct nvwal_config* config,
+  struct nvwal_context* wal);
 
 /**
  * DESCRIBE ME.
- * @param[in] wal_context DESCRIBE ME
+ * @param[in] wal DESCRIBE ME
  */
 nvwal_error_t nvwal_uninit(
-  struct nvwal_context* wal_context);
+  struct nvwal_context* wal);
 
 /**
- * DESCRIBE ME.
- * @param[in] wal_context DESCRIBE ME
- * @param[in] write_buffer DESCRIBE ME
- * @param[out] wal_writer DESCRIBE ME
+ * @brief This must be invoked by the client application after nvwal_init()
+ * to be the log flusher thread.
+ * @param[in] wal The flusher will be the only flusher on this WAL instance
+ * @details
+ * Each WAL instance has exactly one flusher that is responsible for
+ * monitoring log activities of each log writer, writing them out to NVDIMM,
+ * and letting the writers when they can reclaim their buffers.
+ * In order to achieve maximum flexibility as a library, libnvwal lets
+ * the client application to launch a flusher thread and invoke this function
+ * themselves, rather than launching it ourselves.
+ * This allows libnvwal to be agnostic to threading model and threading library
+ * used in the client application.
+ *
+ * @attention The calling thread will \b block until nvwal_uninit() is invoked,
+ * or returns an error for whatever reason.
+ *
+ * @note (To be implemented) In nvwal_config, there will be
+ * an option for libnvwal itself to
+ * launch a thread and invoke this method. In that case, the client application
+ * must make sure that the program is linked against pthread.
  */
-nvwal_error_t nvwal_register_writer(
-  struct nvwal_context* wal_context,
-  struct nvwal_buffer_control_block* write_buffer,
-  struct nvwal_writer_info* wal_writer);
+nvwal_error_t nvwal_flusher_main(
+  struct nvwal_context* wal);
 
 /**
  * DESCRIBE ME.
  */
 nvwal_error_t nvwal_on_wal_write(
-  struct nvwal_context* wal_context,
-  struct nvwal_writer_info* wal_writer,
+  struct nvwal_writer_context* writer,
   const nvwal_byte_t* src,
   uint64_t size_to_write,
   nvwal_epoch_t current);
@@ -68,14 +81,14 @@ nvwal_error_t nvwal_on_wal_write(
 /**
  * DESCRIBE ME.
  */
-nvwal_error_t nvwal_assure_wal_space(
-  struct nvwal_context* wal_context,
-  struct nvwal_writer_info* wal_writer);
+nvwal_error_t nvwal_assure_writer_space(
+  struct nvwal_writer_context* writer);
 //  uint64_t size_to_write);  // no need for this param, right? or is it some kind of hint?
 
 /** Is this needed? Or can we just read wal->durable? */
 nvwal_error_t nvwal_query_durable_epoch(
-  struct nvwal_context* wal_context);
+  struct nvwal_context* wal,
+  nvwal_epoch_t* out);
 
 /** @} */
 

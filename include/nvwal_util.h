@@ -27,12 +27,9 @@
  */
 
 #include <errno.h>
+#include <stdio.h>
 
-/* 32MB sounds like a good place to start? */
-#define NV_SEG_SIZE (1 << 25)
-
-/* Number of empty log files to create at a time (minimize directory fsync) */
-#define PREALLOC_FILE_COUNT 100
+#include "nvwal_types.h"
 
 #define CHECK_FD_VALID(fd)                             \
     do {                                                \
@@ -57,6 +54,19 @@
 
 #define CIRCULAR_SIZE(start, end, size)                         \
     ((start) <= (end) ? (end)-(start) : (end)+(size)-(start))
+
+
+inline nvwal_error_t nvwal_raise_einval(const char* message) {
+  fprintf(stderr, message);
+  errno = EINVAL;
+  return EINVAL;
+}
+
+inline nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param) {
+  fprintf(stderr, message, param);
+  errno = EINVAL;
+  return EINVAL;
+}
 
 /** @} */
 

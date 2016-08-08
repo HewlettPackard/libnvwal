@@ -37,20 +37,38 @@ typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
 typedef int8_t    nvwal_byte_t;
 
-/**
- * Throughout this library, every file path must be represented within this length,
- * including null termination and serial path suffix.
- * In several places, we assume this to avoid dynamically-allocated strings and
- * simplify copying/allocation/deallocation.
- */
-const uint32_t kNvwalMaxPathLength = 256U;
+enum nvwal_constants {
+  /**
+   * Throughout this library, every file path must be represented within this length,
+   * including null termination and serial path suffix.
+   * In several places, we assume this to avoid dynamically-allocated strings and
+   * simplify copying/allocation/deallocation.
+   */
+  kNvwalMaxPathLength = 256U,
 
-/**
- * Likewise, we statically assume each WAL instance has at most this number of
- * log writers assigned.
- * Thanks to these assumptions, all structs defined in this file are PODs.
- */
-const uint32_t kNvwalMaxWorkers = 64U;
+  /**
+   * Likewise, we statically assume each WAL instance has at most this number of
+   * log writers assigned.
+   * Thanks to these assumptions, all structs defined in this file are PODs.
+   */
+  kNvwalMaxWorkers = 64U,
+
+  /**
+   * @brief Largest number of log segments being actively written.
+   * @details
+   * The number of active log segments is calculated from nv_quota / kNvwalSegmentSize.
+   * This constant defines the largest possible number for that.
+   * If nv_quota demands more than this, nvwal_init() returns an error.
+   */
+  kNvwalMaxActiveSegments = 1024U,
+
+  /**
+   * DESCRIBE ME.
+   * 32MB sounds like a good place to start?
+   */
+  kNvwalSegmentSize = 1ULL << 25,
+};
+
 
 /** DESCRIBE ME */
 enum nvwal_seg_state_t {
@@ -88,6 +106,12 @@ struct nvwal_config {
    * If this string is not null-terminated, nvwal_init() will return an error.
    */
   char block_root[kNvwalMaxPathLength];
+
+  /**
+   * When this is a second run or later, give the definitely-durable epoch
+   * as of starting.
+   */
+  nvwal_epoch_t resuming_epoch;
 
   uint32_t numa_domain;
 
@@ -127,14 +151,14 @@ struct nvwal_config {
 };
 
 /**
- * These two structs, nvwal_buffer_control_block and nvwal_writer_info are used to
+ * These two structs, nvwal_buffer_control_block and nvwal_writer_context are used to
  * communicate between a writer thread and the flusher thread, keeping track of
- * the status of one writer's volatile buffer. The pointers follow this
+ * the status of one writer's volatile buffer. The offsets follow this
  * logical ordering:
  *
  *     head <= durable <= copied <= complete <= tail
  *
- * These inequalities might not hold on the numeric values of the pointers
+ * These inequalities might not hold on the numeric values of the offsets
  * because the buffer is circular. Instead, we should first define the notion of
  * "circular size":
  *
@@ -151,33 +175,22 @@ struct nvwal_config {
  *    circular_size(head, a, size) <= circular_size(head, b, size)
  *
  * @note This object is a POD. It can be simply initialized by memzero,
- * copied by memcpy, and no need to free any thing. All pointers in
- * this object just point to an existing buffer, in other words they
- * are just markers (TODO: does it have to be a pointer? how about offset).
+ * copied by memcpy, and no need to free any thing.
  */
 struct nvwal_buffer_control_block {
   /** Updated by writer via nvwal_on_wal_write() and read by flusher thread.  */
 
   /** Where the writer will put new bytes - we don't currently read this */
-  nvwal_byte_t* tail;
+  uint64_t tail;
 
   /** Beginning of completely written bytes */
-  nvwal_byte_t* head;
+  uint64_t head;
 
   /** End of completely written bytes */
-  nvwal_byte_t* complete;
+  uint64_t complete;
 
   /** max of epochs seen by on_wal_write() */
   nvwal_epoch_t latest_written;
-
-  /** Size of (volatile) buffer. Do not change after registration! */
-  uint64_t buffer_size;
-
-  /**
-   * Buffer of buffer_size bytes, allocated/deallocated by the client application.
-   * This library just receives it.
-   */
-  nvwal_byte_t* buffer;
 };
 
 /**
@@ -188,20 +201,33 @@ struct nvwal_buffer_control_block {
  * this object just point to an existing buffer, in other words they
  * are just markers (TODO: does it have to be a pointer? how about offset).
  */
-struct nvwal_writer_info {
+struct nvwal_writer_context {
+  /** Back pointer to the parent WAL context. */
+  struct nvwal_context* parent;
+
+  /**
+   * Sequence unique among the same parent WAL context, 0 means the first writer.
+   * This is not unique among writers on different WAL contexts,
+   * @invariant this == parent->writers + writer_seq_id
+   */
+  uint32_t writer_seq_id;
+
   struct nvwal_buffer_control_block cb;
 
   /**
     * Everything up to this point is durable. It is safe for the application
     * to move the head up to this point.
     */
-  nvwal_byte_t* flushed;
+  uint64_t flushed;
 
   /**
     * Everything up to this point has been copied by the flusher thread but
     * might not yet be durable
     */
-  nvwal_byte_t* copied;
+  uint64_t copied;
+
+  /** Shorthand for parent->config.writer_buffers[writer_seq_id] */
+  nvwal_byte_t* buffer;
 
   /** Pending work is everything between copied and writer->complete */
 };
@@ -220,7 +246,7 @@ struct nvwal_log_segment {
   int32_t disk_fd;
 
   /** May be used for communication between flusher thread and fsync thread */
-  nvwal_seg_state_t state;
+  enum nvwal_seg_state_t state;
 
   /** true if direntry of disk_fd is durable */
   bool dir_synced;
@@ -238,7 +264,7 @@ struct nvwal_log_segment {
  * It's the client program's responsibility to coordinate them.
  *
  * @note This object is a POD. It can be simply initialized by memzero,
- * copied by memcpy, and no need to free any thing.
+ * copied by memcpy, and no need to free any thing \b except \b file \b descriptors.
  * @note To be a POD, however, this object conservatively consumes a bit large memory.
  * We recommend allocating this object on heap rather than on stack. Although
  * it's very unlikely to have this long-living object on stack anyways (unit test?)..
@@ -253,9 +279,15 @@ struct nvwal_context {
    */
   struct nvwal_config config;
 
-  int num_segments;
+  /**
+   * DESCRIBE ME
+   */
+  int num_active_segments;
 
-  struct nvwal_log_segment segment;
+  /**
+   * DESCRIBE ME
+   */
+  struct nvwal_log_segment active_segments[kNvwalMaxActiveSegments];
 
   int log_root_fd;
 
@@ -274,7 +306,7 @@ struct nvwal_context {
   /** Index into segment[] */
   int cur_seg_idx;
 
-  struct nvwal_writer_info writers[kNvwalMaxWorkers];
+  struct nvwal_writer_context writers[kNvwalMaxWorkers];
 };
 
 /** @} */

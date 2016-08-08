@@ -1,5 +1,6 @@
 
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,107 +10,209 @@
 
 #include "nvwal_api.h"
 #include "nvwal_atomics.h"
+#include "nvwal_util.h"
 
-
+/**************************************************************************
+ *
+ *  Initializations
+ *
+ ***************************************************************************/
 nvwal_error_t nvwal_init(
   const struct nvwal_config* config,
   struct nvwal_context* wal) {
   int nv_root_fd;
   int block_root_fd;
-  unsigned long long i;
-  struct stat file_stats;
+  uint32_t i;
 
   memset(wal, 0, sizeof(*wal));
+  memcpy(wal->config, config, sizeof(*config));
 
-  pthread_mutex_init(&wal->mutex, 0);
-
-  wal->log_root = strdup(log_path);
-  if (circular_log) {
-    fprintf(stderr, "Circular log not supported\n");
-    exit(-1);
-  } else {
-    wal->max_log_size = 0;
-
-    wal->log_descriptor = malloc(sizeof(int) * wal->num_segments);
-    memset(wal->log_descriptor, -1, sizeof(int) * wal->num_segments);
+  if (strnlen(kNvwalMaxPathLength, config->nv_root) >= kNvwalMaxPathLength) {
+    return nvwal_raise_einval("Error: nv_root must be null terminated\n");
+  } else if (strnlen(kNvwalMaxPathLength, config->block_root) >= kNvwalMaxPathLength) {
+    return nvwal_raise_einval("Error: block_root must be null terminated\n");
+  } else if (config->writer_count == 0 || config->writer_count > kNvwalMaxWorkers) {
+    return nvwal_raise_einval_llu(
+      "Error: writer_count must be 1 to %llu\n",
+      kNvwalMaxWorkers);
+  } else if ((config->writer_buffer_size % 512U) || config->writer_buffer_size == 0) {
+    return nvwal_raise_einval(
+      "Error: writer_buffer_size must be a non-zero multiply of page size (512)\n");
   }
 
-  wal->nv_root = strdup(nv_root);
-  wal->nv_quota = nv_quota;
-  wal->num_segments = nv_quota / NV_SEG_SIZE;
-
-  if (nv_quota < 2*NV_SEG_SIZE) {
-    fprintf(stderr,
-            "Error: nv_quota less than 2*NV_SEG_SIZE (%lu)\n",
-            2*NV_SEG_SIZE);
-    exit(-1);
+  for (i = 0; i < config->writer_count; ++i) {
+    if (!config->writer_buffers[i]) {
+      return nvwal_raise_einval_llu(
+        "Error: writer_buffers[ %llu ] is null\n",
+        i);
+    }
   }
 
-  wal->nv_descriptor = malloc(sizeof(int) * wal->num_segments);
-  memset(wal->nv_descriptor, -1, sizeof(int) * wal->num_segments);
-  wal->nv_baseaddr = malloc(sizeof(void *) * wal->num_segments);
-  memset(wal->nv_baseaddr, 0, sizeof(void *) * wal->num_segments);
+  wal->num_active_segments = config->nv_quota / kNvwalSegmentSize;
+  if (config->nv_quota % kNvwalSegmentSize) {
+    return nvwal_raise_einval_llu(
+      "Error: nv_quota must be a multiply of %llu\n",
+      kNvwalSegmentSize);
+  } else if (wal->num_active_segments < 2U) {
+    return nvwal_raise_einval_llu(
+      "Error: nv_quota must be at least %llu\n",
+      2ULL * kNvwalSegmentSize);
+  } else if (wal->num_active_segments > kNvwalMaxActiveSegments) {
+    return nvwal_raise_einval_llu(
+      "Error: nv_quota must be at most %llu\n",
+      kNvwalMaxActiveSegments * kNvwalSegmentSize);
+  }
 
-  nv_root_fd = open(nv_root, O_DIRECTORY|O_RDONLY);
-  ASSERT_FD_VALID(nv_root_fd);
-  block_root_fd = open(secondary_root, O_DIRECTORY|O_RDONLY);
-  ASSERT_FD_VALID(block_root_fd);
+  wal->durable = config->resuming_epoch;
+  wal->latest = config->resuming_epoch;
+
+  for (i = 0; i < config->writer_count; ++i) {
+    wal->writers[i].writer_seq_id = i;
+    wal->writers[i].parent = wal;
+    wal->writers[i].copied = 0;
+    wal->writers[i].flushed = 0;
+    wal->writers[i].buffer = config->writer_buffers[i];
+  }
+
+  nv_root_fd = open(config->nv_root, O_DIRECTORY|O_RDONLY);
+  CHECK_FD_VALID(nv_root_fd);
 
   /* Initialize all nv segments */
 
-  for (i = 0; i < wal->num_segments; i++) {
+  for (i = 0; i < wal->num_active_segments; ++i) {
     init_nvram_segment(wal, nv_root_fd, i);
   }
 
   /* Created the files, fsync parent directory */
   fsync(nv_root_fd);
 
-  wal->cur_region = nv_baseaddr[0];
+  close(nv_root_fd);
 
-  /*
-    * Set up some flusher thread stuff?
-    */
-
-  return wal;
+  return 0;
 }
+
+/**************************************************************************
+ *
+ *  Un-Initializations
+ *
+ ***************************************************************************/
 
 nvwal_error_t nvwal_uninit(
   struct nvwal_context* wal_context) {
   return 0;
 }
 
-nvwal_error_t nvwal_register_writer(
-  struct nvwal_context* wal,
-  struct nvwal_buffer_control_block* write_buffer,
-  struct nvwal_writer_info* wal_writer) {
-  struct nvwal_writer_info * new_writer;
+/**************************************************************************
+ *
+ *  Writers
+ *
+ ***************************************************************************/
 
-  new_writer = malloc(sizeof(*new_writer));
-  memset(new_writer, 0, sizeof(*new_writer));
-  new_writer->writer = write_buffer;
-  new_writer->flushed = write_buffer->head;
-  new_writer->copied = write_buffer->head;
+nvwal_error_t nvwal_on_wal_write(
+  struct nvwal_writer_context* writer,
+  const void* src,
+  uint64_t uint64_to_write,
+  nvwal_epoch_t current) {
+  /*
+ * Very simple version which does not allow gaps in the volatile log
+ * and does not check possible invariant violations e.g. tail-catching
+ */
 
-  pthread_mutex_lock(&wal->mutex);
+  /* Do something with current epoch and wal->latest
+    * Is this where we might want to force a commit if epoch
+    * is getting ahead of our durability horizon? */
+  assert(writer->cb.latest_written <= current);
+  writer->cb.latest_written = current;
 
-  if (wal->writer_list == 0) {
-      wal->writer_list = new_writer;
-      new_writer->next = new_writer;
-  } else {
-      new_writer->next = wal->writer_list->next;
-      wal->writer_list->next = new_writer;
+  /* Bump complete pointer and wrap around if necessary */
+  writer->cb.complete += uint64_to_write;
+  if (writer->cb.complete >= writer->parent->config.writer_buffer_size) {
+    writer->cb.complete -= writer->parent->config.writer_buffer_size;
   }
 
-  pthread_mutex_unlock(&wal->mutex);
+  /* Perhaps do something if we have a sleepy flusher thread */
+
+  return 0;
 }
 
+nvwal_error_t nvwal_assure_writer_space(
+  struct nvwal_writer_context* writer) {
+    /*
+      check size > circular_size(tail, head, size). Note the reversal
+      of the usual parameter ordering, since we're looking for *free*
+      space in the log. We could also consider circular_size(tail, durable).
+
+      if it's bad, we probably want to do something like:
+      check
+      busy wait
+      check
+      nanosleep
+      check
+      grab (ticket?) lock
+      while !check
+      cond_wait
+      drop lock
+    */
+}
+
+/**************************************************************************
+ *
+ *  Flusher
+ *
+ ***************************************************************************/
+void process_one_writer(struct nvwal_writer_context * writer);
+void * flusher_thread_main(void * arg) {
+    nvwal_context * wal = arg;
+
+    pthread_mutex_lock(&wal->mutex);
+
+    if (wal->writer_list == 0) {
+        fprintf(stderr, "No writers registered for flushing!\n");
+        pthread_mutex_unlock(&wal->mutex);
+        pthread_exit(0);
+    }
+
+    while(1) {
+
+        /* Look for work */
+        nvwal_writer_context * cur_writer = wal->writer_list;
+        int found_work = 0;
+
+        do {
+
+            found_work = process_one_writer(wal, cur_writer);
+
+            cur_writer = cur_writer->next;
+
+        } while (cur_writer != wal->writer_list);
+
+        /* Ensure writes are durable in NVM */
+        pmem_drain();
+
+        /* Some kind of metadata commit, we could use libpmemlog.
+         * This needs to track which epochs are durable, what's on disk
+         * etc. */
+
+        //commit_metadata_updates(wal)
+
+        // maybe wake sleeping writer threads?
+
+        pthread_mutex_unlock(&wal->mutex);
+        //Needs a fair lock instead so waiting writers can be added
+        //or maybe even removed
+        pthread_mutex_lock(&wal->mutex);
+    }
+    pthread_mutex_unlock(&wal->mutex);
+    return 0;
+}
+
+
 void process_one_writer(
-  struct nvwal_context * wal,
-  struct nvwal_writer_info * winfo) {
-  nvwal_byte_t* complete = cur_winfo->writer->complete;
-  nvwal_byte_t* copied = cur_winfo->copied;
-  uint64_t size = cur_winfo->writer->buffer_size;
-  nvwal_byte_t* end = cur_winfo->writer->buffer + size;
+  struct nvwal_writer_context * writer) {
+  nvwal_byte_t* complete = cur_writer->writer->complete;
+  nvwal_byte_t* copied = cur_writer->copied;
+  uint64_t size = cur_writer->writer->buffer_size;
+  nvwal_byte_t* end = cur_writer->writer->buffer + size;
   uint64_t len;
   int found_work = 0;
 
@@ -121,7 +224,7 @@ void process_one_writer(
 
     // Figure out how much we can copy linearly
     total_length = circular_size(copied, complete, size);
-    nvseg_remaining = NV_SEG_SIZE - wal->nv_offset;
+    nvseg_remaining = kNvwalSegmentSize - wal->nv_offset;
     writer_length = end - copied;
 
     len = MIN(MIN(total_length,nvseg_remaining),writer_length);
@@ -135,13 +238,13 @@ void process_one_writer(
     assert(copied <= end);
     if (copied == end) {
       // wrap around
-      copied = cur_winfo->writer->buffer;
+      copied = cur_writer->writer->buffer;
     }
 
     wal->nv_offset += len;
 
-    assert(wal->nv_offset <= NV_SEG_SIZE);
-    if (wal->nv_offset == NV_SEG_SIZE) {
+    assert(wal->nv_offset <= kNvwalSegmentSize);
+    if (wal->nv_offset == kNvwalSegmentSize) {
       log_segment * cur_segment = wal->segment[wal->cur_seg_idx];
       int next_seg_idx = wal->cur_seg_idx + 1 % wal->num_segments;
       log_segment * next_segment = wal->segment[next_seg_idx];
@@ -185,51 +288,6 @@ void process_one_writer(
   return found_work;
 }
 
-void * flusher_thread_main(void * arg)
-{
-    nvwal_context * wal = arg;
-
-    pthread_mutex_lock(&wal->mutex);
-
-    if (wal->writer_list == 0) {
-        fprintf(stderr, "No writers registered for flushing!\n");
-        pthread_mutex_unlock(&wal->mutex);
-        pthread_exit(0);
-    }
-
-    while(1) {
-
-        /* Look for work */
-        nvwal_writer_info * cur_winfo = wal->writer_list;
-        int found_work = 0;
-
-        do {
-
-            found_work = process_one_writer(wal, cur_winfo);
-
-            cur_winfo = cur_winfo->next;
-
-        } while (cur_winfo != wal->writer_list);
-
-        /* Ensure writes are durable in NVM */
-        pmem_drain();
-
-        /* Some kind of metadata commit, we could use libpmemlog.
-         * This needs to track which epochs are durable, what's on disk
-         * etc. */
-
-        //commit_metadata_updates(wal)
-
-        // maybe wake sleeping writer threads?
-
-        pthread_mutex_unlock(&wal->mutex);
-        //Needs a fair lock instead so waiting writers can be added
-        //or maybe even removed
-        pthread_mutex_lock(&wal->mutex);
-    }
-    pthread_mutex_unlock(&wal->mutex);
-    return 0;
-}
 
 void * fsync_thread_main(void * arg)
 {
@@ -247,64 +305,6 @@ void * fsync_thread_main(void * arg)
     }
 }
 
-nvwal_error_t nvwal_on_wal_write(
-  struct nvwal_context* wal,
-  struct nvwal_writer_info* winfo,
-  const void* src,
-  uint64_t uint64_to_write,
-  nvwal_epoch_t current)
-
-/*
- * Very simple version which does not allow gaps in the volatile log
- * and does not check possible invariant violations e.g. tail-catching
- */
-
-{
-  if (src != winfo->writer->complete) {
-    fprintf(stderr, "Error: src %p complete %p\n",
-            src,
-            winfo->writer->complete);
-    exit(-1);
-  }
-
-  /* Do something with current epoch and wal->latest
-    * Is this where we might want to force a commit if epoch
-    * is getting ahead of our durability horizon? */
-  assert(winfo->writer->latest_written <= current);
-  winfo->writer->latest_written = current;
-
-  /* Bump complete pointer and wrap around if necessary */
-  complete = complete + size;
-  if (complete >= winfo->writer->buffer + winfo->writer->buffer_size) {
-    complete = complete - winfo->writer->buffer_size;
-  }
-
-  /* Perhaps do something if we have a sleepy flusher thread */
-
-  return 0;
-}
-
-nvwal_error_t nvwal_assure_wal_space(
-  struct nvwal_context* wal,
-  struct nvwal_writer_info* winfo) {
-    /*
-      check size > circular_size(tail, head, size). Note the reversal
-      of the usual parameter ordering, since we're looking for *free*
-      space in the log. We could also consider circular_size(tail, durable).
-
-      if it's bad, we probably want to do something like:
-      check
-      busy wait
-      check
-      nanosleep
-      check
-      grab (ticket?) lock
-      while !check
-      cond_wait
-      drop lock
-    */
-}
-
 void init_nvram_segment(
   struct nvwal_context * wal,
   int root_fd,
@@ -319,15 +319,15 @@ void init_nvram_segment(
   ASSERT_FD_VALID(fd);
 
   //posix_fallocate doesn't set errno, do it ourselves
-  errno = posix_fallocate(fd, 0, NV_SEG_SIZE);
+  errno = posix_fallocate(fd, 0, kNvwalSegmentSize);
   ASSERT_NO_ERROR(err);
-  err = ftruncate(fd, NV_SEG_SIZE);
+  err = ftruncate(fd, kNvwalSegmentSize);
   ASSERT_NO_ERROR(err);
   fsync(fd);
 
   /* First try for a hugetlb mapping */
   baseaddr = mmap(0,
-                  NV_SEG_SIZE,
+                  kNvwalSegmentSize,
                   PROT_READ|PROT_WRITE,
                   MAP_SHARED|MAP_PREALLOCATE|MAP_HUGETLB
                   fd,
@@ -337,7 +337,7 @@ void init_nvram_segment(
     /* If that didn't work, try for a non-hugetlb mapping */
     printf(stderr, "Failed hugetlb mapping\n");
     baseaddr = mmap(0,
-                    NV_SEG_SIZE,
+                    kNvwalSegmentSize,
                     PROT_READ|PROT_WRITE,
                     MAP_SHARED|MAP_PREALLOC,
                     fd,
@@ -349,7 +349,7 @@ void init_nvram_segment(
   /* Even with fallocate we don't trust the metadata to be stable
     * enough for userspace durability. Actually write some bytes! */
 
-  memset(baseaddr, 0x42, NV_SEG_SIZE);
+  memset(baseaddr, 0x42, kNvwalSegmentSize);
   msync(fd);
 
   seg->seq = INVALID_SEQNUM;
@@ -373,9 +373,9 @@ void submit_write(
 
   bytes_written = write(seg->disk_fd,
                         seg->nv_baseaddr,
-                        NV_SEG_SIZE);
+                        kNvwalSegmentSize);
 
-  ASSERT_NO_ERROR(bytes_written != NV_SEG_SIZE);
+  ASSERT_NO_ERROR(bytes_written != kNvwalSegmentSize);
 
   seg->state = SEG_SUBMITTED;
 }
