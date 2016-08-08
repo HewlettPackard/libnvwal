@@ -37,6 +37,21 @@ typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
 typedef int8_t    nvwal_byte_t;
 
+/**
+ * Throughout this library, every file path must be represented within this length,
+ * including null termination and serial path suffix.
+ * In several places, we assume this to avoid dynamically-allocated strings and
+ * simplify copying/allocation/deallocation.
+ */
+const uint32_t kNvwalMaxPathLength = 256U;
+
+/**
+ * Likewise, we statically assume each WAL instance has at most this number of
+ * log writers assigned.
+ * Thanks to these assumptions, all structs defined in this file are PODs.
+ */
+const uint32_t kNvwalMaxWorkers = 64U;
+
 /** DESCRIBE ME */
 enum nvwal_seg_state_t {
   SEG_UNUSED = 0,
@@ -47,67 +62,72 @@ enum nvwal_seg_state_t {
   SEG_SYNCED
 };
 
+/** Ignored. */
+enum nvwal_config_flags {
+    BG_FSYNC_THREAD = 1 << 0,
+    MMAP_DISK_FILE  = 1 << 1,
+    CIRCULAR_LOG    = 1 << 2
+};
+
 /**
- * @brief Represents a context of \b one stream of write-ahead-log placed in
- * NVDIMM and secondary device.
- * @details
- * Each nvwal_context instance must be initialized by nvwal_init() and cleaned up by
- * nvwal_uninit().
- * Client programs that do distributed logging will instantiate
- * an arbitrary number of this context, one for each log stream.
- * There is no interection between two nvwal_context from libnvwal's standpoint.
- * It's the client program's responsibility to coordinate them.
+ * DESCRIBE ME.
+ * @note This object is a POD. It can be simply initialized by memzero,
+ * copied by memcpy, and no need to free any thing.
  */
-struct nvwal_context {
-  nvwal_epoch_t durable;
-  nvwal_epoch_t latest;
+struct nvwal_config {
+  /**
+   * Null-terminated string of folder to NVDIMM storage, under which
+   * this WAL instance will write out log files at first.
+   * If this string is not null-terminated, nvwal_init() will return an error.
+   */
+  char nv_root[kNvwalMaxPathLength];
 
-  char * nv_root;
+  /**
+   * Null-terminated string of folder to block storage, into which
+   * this WAL instance will copy log files from NVDIMM storage.
+   * If this string is not null-terminated, nvwal_init() will return an error.
+   */
+  char block_root[kNvwalMaxPathLength];
+
+  uint32_t numa_domain;
+
+  /**
+   * Number of log writer threads on this WAL instance.
+   * This value must be kNvwalMaxWorkers or less.
+   * Otherwise, nvwal_init() will return an error.
+   */
+  uint32_t writer_count;
+
+  /** How big our nvram segments are */
+  uint64_t nv_seg_size;
   uint64_t nv_quota;
-  int num_segments;
 
-  struct nvwal_log_segment* segment;
+  /** Assumed to be the same as nv_seg_size for now */
+  uint64_t block_seg_size;
 
-  /** Path to log on block storage */
-  char * log_root;
-  int log_root_fd;
+  /** Size of (volatile) buffer for each writer-thread. */
+  uint64_t writer_buffer_size;
 
-  /** 0 if append-only log */
-  uint64_t max_log_size;
+  /**
+    * How many on-disk log segments to create a time (empty files)
+    * This reduces the number of times we have to fsync() the directory
+    */
+  uint32_t prealloc_file_count;
 
-  /** Next on-disk sequence number, see log_segment.seq  */
-  uint64_t log_sequence;
+  uint64_t option_flags;
 
-  /** mmapped address of current nv segment*/
-  char* cur_region;
-
-  /** Index into nv_region */
-  uint64_t nv_offset;
-
-  /** Index into segment[] */
-  int cur_seg_idx;
-
-  struct nvwal_writer_info* writer_list;
-};
-
-/** DESCRIBE ME */
-struct nvwal_log_segment {
-  nvwal_byte_t* nv_baseaddr;
-
-  /** On-disk sequence number, identifies filename */
-  uint64_t seq;
-  int32_t nvram_fd;
-  int32_t disk_fd;
-
-  /** May be used for communication between flusher thread and fsync thread */
-  nvwal_seg_state_t state;
-
-  /** true if direntry of disk_fd is durable */
-  bool dir_synced;
+  /**
+   * Buffer of writer_buffer_size bytes for each writer-thread,
+   * allocated/deallocated by the client application.
+   * The client application must provide it as of nvwal_init().
+   * If any of writer_buffers[0] to writer_buffers[writer_count - 1]
+   * is null, nvwal_init() will return an error.
+   */
+  nvwal_byte_t* writer_buffers[kNvwalMaxWorkers];
 };
 
 /**
- * These two structs, BufCB and WInfo (names subject to change) are used to
+ * These two structs, nvwal_buffer_control_block and nvwal_writer_info are used to
  * communicate between a writer thread and the flusher thread, keeping track of
  * the status of one writer's volatile buffer. The pointers follow this
  * logical ordering:
@@ -130,6 +150,10 @@ struct nvwal_log_segment {
  *
  *    circular_size(head, a, size) <= circular_size(head, b, size)
  *
+ * @note This object is a POD. It can be simply initialized by memzero,
+ * copied by memcpy, and no need to free any thing. All pointers in
+ * this object just point to an existing buffer, in other words they
+ * are just markers (TODO: does it have to be a pointer? how about offset).
  */
 struct nvwal_buffer_control_block {
   /** Updated by writer via nvwal_on_wal_write() and read by flusher thread.  */
@@ -149,15 +173,23 @@ struct nvwal_buffer_control_block {
   /** Size of (volatile) buffer. Do not change after registration! */
   uint64_t buffer_size;
 
-  /** Buffer of buffer_size bytes, allocated by application */
+  /**
+   * Buffer of buffer_size bytes, allocated/deallocated by the client application.
+   * This library just receives it.
+   */
   nvwal_byte_t* buffer;
 };
 
-/** DESCRIBE ME */
+/**
+ * DESCRIBE ME
+ *
+ * @note This object is a POD. It can be simply initialized by memzero,
+ * copied by memcpy, and no need to free any thing. All pointers in
+ * this object just point to an existing buffer, in other words they
+ * are just markers (TODO: does it have to be a pointer? how about offset).
+ */
 struct nvwal_writer_info {
-  /** Updated by flusher, read by writer */
-  struct nvwal_writer_info* next;
-  struct nvwal_buffer_control_block* writer;
+  struct nvwal_buffer_control_block cb;
 
   /**
     * Everything up to this point is durable. It is safe for the application
@@ -174,34 +206,75 @@ struct nvwal_writer_info {
   /** Pending work is everything between copied and writer->complete */
 };
 
-/** Ignored. */
-enum nvwal_config_flags {
-    BG_FSYNC_THREAD = 1 << 0,
-    MMAP_DISK_FILE  = 1 << 1,
-    CIRCULAR_LOG    = 1 << 2
+/**
+ * DESCRIBE ME
+ * @note This object is a POD. It can be simply initialized by memzero,
+ * copied by memcpy, and no need to free any thing.
+ */
+struct nvwal_log_segment {
+  nvwal_byte_t* nv_baseaddr;
+
+  /** On-disk sequence number, identifies filename */
+  uint64_t seq;
+  int32_t nvram_fd;
+  int32_t disk_fd;
+
+  /** May be used for communication between flusher thread and fsync thread */
+  nvwal_seg_state_t state;
+
+  /** true if direntry of disk_fd is durable */
+  bool dir_synced;
 };
 
-/** DESCRIBE ME */
-struct nvwal_config {
-  char * nv_root;
-  int numa_domain;
-
-  /** How big our nvram segments are */
-  uint64_t nv_seg_size;
-  uint64_t nv_quota;
-
-  char * log_path;
-
-  /** Assumed to be the same as nv_seg_size for now */
-  uint64_t disk_seg_size;
+/**
+ * @brief Represents a context of \b one stream of write-ahead-log placed in
+ * NVDIMM and secondary device.
+ * @details
+ * Each nvwal_context instance must be initialized by nvwal_init() and cleaned up by
+ * nvwal_uninit().
+ * Client programs that do distributed logging will instantiate
+ * an arbitrary number of this context, one for each log stream.
+ * There is no interection between two nvwal_context from libnvwal's standpoint.
+ * It's the client program's responsibility to coordinate them.
+ *
+ * @note This object is a POD. It can be simply initialized by memzero,
+ * copied by memcpy, and no need to free any thing.
+ * @note To be a POD, however, this object conservatively consumes a bit large memory.
+ * We recommend allocating this object on heap rather than on stack. Although
+ * it's very unlikely to have this long-living object on stack anyways (unit test?)..
+ */
+struct nvwal_context {
+  nvwal_epoch_t durable;
+  nvwal_epoch_t latest;
 
   /**
-    * How many on-disk log segments to create a time (empty files)
-    * This reduces the number of times we have to fsync() the directory
-    */
-  int prealloc_file_count;
+   * All static configurations given by the user on initializing this WAL instance.
+   * Once constructed, this is/must-be const. Do not modify it yourself!
+   */
+  struct nvwal_config config;
 
-  int option_flags;
+  int num_segments;
+
+  struct nvwal_log_segment segment;
+
+  int log_root_fd;
+
+  /** 0 if append-only log */
+  uint64_t max_log_size;
+
+  /** Next on-disk sequence number, see log_segment.seq  */
+  uint64_t log_sequence;
+
+  /** mmapped address of current nv segment*/
+  nvwal_byte_t* cur_region;
+
+  /** Index into nv_region */
+  uint64_t nv_offset;
+
+  /** Index into segment[] */
+  int cur_seg_idx;
+
+  struct nvwal_writer_info writers[kNvwalMaxWorkers];
 };
 
 /** @} */
