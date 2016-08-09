@@ -235,7 +235,7 @@ struct nvwal_writer_context {
 /**
  * DESCRIBE ME
  * @note This object is a POD. It can be simply initialized by memzero,
- * copied by memcpy, and no need to free any thing.
+ * copied by memcpy, and no need to free any thing \b except \b file \b descriptors.
  */
 struct nvwal_log_segment {
   nvwal_byte_t* nv_baseaddr;
@@ -282,14 +282,14 @@ struct nvwal_context {
   /**
    * DESCRIBE ME
    */
-  int num_active_segments;
+  uint32_t num_active_segments;
 
   /**
    * DESCRIBE ME
    */
   struct nvwal_log_segment active_segments[kNvwalMaxActiveSegments];
 
-  int log_root_fd;
+  int32_t log_root_fd;
 
   /** 0 if append-only log */
   uint64_t max_log_size;
@@ -304,9 +304,18 @@ struct nvwal_context {
   uint64_t nv_offset;
 
   /** Index into segment[] */
-  int cur_seg_idx;
+  uint32_t cur_seg_idx;
 
   struct nvwal_writer_context writers[kNvwalMaxWorkers];
+
+  /**
+   * Used to inform the flusher that nvwal_uninit() was invoked.
+   */
+  uint8_t flusher_stop_requested;
+  /**
+   * Set when the flusher thread started running.
+   */
+  uint8_t flusher_running;
 };
 
 /** @} */

@@ -43,15 +43,24 @@
 
 #include <stdatomic.h>
 
-typedef memory_order nvwal_memory_order;
+typedef enum {
+  nvwal_memory_order_relaxed = memory_order_relaxed,
+  nvwal_memory_order_consume = memory_order_consume,
+  nvwal_memory_order_acquire = memory_order_acquire,
+  nvwal_memory_order_release = memory_order_release,
+  nvwal_memory_order_acq_rel = memory_order_acq_rel,
+  nvwal_memory_order_seq_cst = memory_order_seq_cst,
+} nvwal_memory_order;
 
 #define nvwal_atomic_init(PTR, VAL) atomic_init(PTR, VAL)
 
 #define nvwal_atomic_store(PTR, VAL) atomic_store(PTR, VAL)
-#define nvwal_atomic_store_explicit(PTR, VAL, ORD) atomic_store_explicit(PTR, VAL, ORD)
+#define nvwal_atomic_store_explicit(PTR, VAL, ORD)\
+  atomic_store_explicit(PTR, VAL, ORD)
 
 #define nvwal_atomic_load(PTR) atomic_load(PTR)
-#define nvwal_atomic_load_explicit(PTR, ORD) atomic_load_explicit(PTR, ORD)
+#define nvwal_atomic_load_explicit(PTR, ORD)\
+  atomic_load_explicit(PTR, ORD)
 
 #define nvwal_atomic_exchange(PTR, VAL) atomic_exchange(PTR, VAL)
 #define nvwal_atomic_exchange_explicit(PTR, VAL, ORD)\
@@ -89,6 +98,17 @@ typedef memory_order nvwal_memory_order;
 #define nvwal_atomic_thread_fence(ORD) atomic_thread_fence(ORD)
 
 #endif  // __STDC_NO_ATOMICS__
+
+/** And a few, implementation-agnostic shorthand. */
+
+#define nvwal_atomic_load_acquire(PTR)\
+  atomic_load_explicit(PTR, nvwal_memory_order_acquire)
+
+#define nvwal_atomic_load_consume(PTR)\
+  atomic_load_explicit(PTR, nvwal_memory_order_consume)
+
+#define nvwal_atomic_store_release(PTR, VAL)\
+  atomic_store_explicit(PTR, VAL, nvwal_memory_order_release)
 
 /** @} */
 

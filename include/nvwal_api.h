@@ -74,8 +74,7 @@ nvwal_error_t nvwal_flusher_main(
  */
 nvwal_error_t nvwal_on_wal_write(
   struct nvwal_writer_context* writer,
-  const nvwal_byte_t* src,
-  uint64_t size_to_write,
+  uint64_t bytes_written,
   nvwal_epoch_t current);
 
 /**
