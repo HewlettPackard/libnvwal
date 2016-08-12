@@ -244,6 +244,7 @@ struct nvwal_log_segment {
   uint64_t seq;
   int32_t nvram_fd;
   int32_t disk_fd;
+  uint64_t disk_offset;
 
   /** May be used for communication between flusher thread and fsync thread */
   enum nvwal_seg_state_t state;

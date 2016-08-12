@@ -53,7 +53,7 @@ nvwal_error_t nvwal_init(
       kNvwalMaxWorkers);
   } else if ((config->writer_buffer_size % 512U) || config->writer_buffer_size == 0) {
     return nvwal_raise_einval(
-      "Error: writer_buffer_size must be a non-zero multiply of page size (512)\n");
+      "Error: writer_buffer_size must be a non-zero multiple of page size (512)\n");
   }
 
   for (i = 0; i < config->writer_count; ++i) {
@@ -67,7 +67,7 @@ nvwal_error_t nvwal_init(
   wal->num_active_segments = config->nv_quota / kNvwalSegmentSize;
   if (config->nv_quota % kNvwalSegmentSize) {
     return nvwal_raise_einval_llu(
-      "Error: nv_quota must be a multiply of %llu\n",
+      "Error: nv_quota must be a multiple of %llu\n",
       kNvwalSegmentSize);
   } else if (wal->num_active_segments < 2U) {
     return nvwal_raise_einval_llu(
@@ -88,6 +88,10 @@ nvwal_error_t nvwal_init(
     wal->writers[i].copied = 0;
     wal->writers[i].flushed = 0;
     wal->writers[i].buffer = config->writer_buffers[i];
+    wal->writers[i].cb.latest_written = config->resuming_epoch;
+    wal->writers[i].cb.tail = 0;
+    wal->writers[i].cb.head = 0;
+    wal->writers[i].cb.complete = 0;
   }
 
   nv_root_fd = open(config->nv_root, O_DIRECTORY|O_RDONLY);
@@ -103,6 +107,11 @@ nvwal_error_t nvwal_init(
   fsync(nv_root_fd);
 
   close(nv_root_fd);
+
+  block_root_fd = open(config->block_root, O_DIRECTORY|O_RDONLY);
+  CHECK_FD_VALID(block_root_fd);
+
+  wal->log_root_fd = block_root_fd;
 
   return 0;
 }
@@ -120,6 +129,10 @@ nvwal_error_t nvwal_uninit(
     nvwal_atomic_store(&(wal->flusher_stop_requested), 1U);
     while (nvwal_atomic_load(&(wal->flusher_running)) != 0) {
       /** TODO Should have a sleep or at least yield */
+      /* NOTE: Do we need to kick the flusher one more time or should we assume
+       * assume the application's writer threads are responsible enough to 
+       * call nvwal_on_wal_write one last time before the uninit happens?
+       */
     }
   }
 
@@ -289,7 +302,10 @@ nvwal_error_t process_one_writer(
         * flushing out data, but might as well be done here. The
         * hard work can be done in batches, this function might
         * just pull an already-open descriptor out of a pool. */
-      allocate_backing_file(cur_segment);
+      /* This seems to indicate that we will have one disk file
+       * per nvram segment
+       */ 
+      allocate_backing_file(wal, cur_segment);
 
       wal->cur_seg_idx = next_seg_idx;
       wal->cur_region = cur_segment->nv_baseaddr;
@@ -342,7 +358,7 @@ void init_nvram_segment(
   baseaddr = mmap(0,
                   kNvwalSegmentSize,
                   PROT_READ|PROT_WRITE,
-                  MAP_SHARED|MAP_PREALLOCATE|MAP_HUGETLB
+                  MAP_SHARED|MAP_PREALLOC|MAP_HUGETLB
                   fd,
                   0);
 
@@ -363,7 +379,7 @@ void init_nvram_segment(
     * enough for userspace durability. Actually write some bytes! */
 
   memset(baseaddr, 0x42, kNvwalSegmentSize);
-  msync(fd);
+  msync(baseaddr, kNvwalSegmentSize, MS_SYNC);
 
   seg->seq = INVALID_SEQNUM;
   seg->nvram_fd = fd;
@@ -371,6 +387,12 @@ void init_nvram_segment(
   seg->nv_baseaddr = baseaddr;
   seg->state = SEG_UNUSED;
   seg->dir_synced = 0;
+
+  /* Is this necessary? I'm assuming this is offset into the disk-backed file.
+   * If we have one disk file per nvram segment, we don't need this.
+   * When we submit_write a segment, the FS should be tracking the file offset
+   * for us anyway. What is this actually used for?
+   */
   seg->disk_offset = 0;
 }
 
@@ -420,6 +442,8 @@ void sync_backing_file(
   seg->disk_fd = -1;
   seg->state = SEG_UNUSED;
   seg->seq = 0;
+  seg->disk_offset = 0; /* if we are bothering with this */
+  seg->dir_synced = false;
 }
 
 void allocate_backing_file(
@@ -437,7 +461,7 @@ void allocate_backing_file(
       snprintf(filename, "log-segment-%lu", i);
       fd = openat(wal->log_root_fd,
                   filename,
-                  O_CREAT|O_RDWR|O_TRUNC,
+                  O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
                   S_IRUSR|S_IWUSR);
 
       ASSERT_FD_VALID(fd);
@@ -455,13 +479,17 @@ void allocate_backing_file(
       * We may want to take care of this in the fsync thread instead
       * and set the dir_synced flag on the segment descriptor */
     fsync(wal->log_root_fd);
+    seg->dir_synced = true;
   }
 
   /* The file should already exist */
   snprintf(filename, "log-segment-%lu", our_sequence);
   our_fd = openat(wal->log_root_fd,
                   filename,
-                  O_RDWR|O_TRUNC);
+                  O_RDWR|O_TRUNC|O_APPEND);
 
   ASSERT_FD_VALID(our_fd);
+
+  seg->disk_fd = our_fd;
+
 }
