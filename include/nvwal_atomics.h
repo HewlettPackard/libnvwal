@@ -33,13 +33,15 @@
  * @{
  */
 
-#ifdef __STDC_NO_ATOMICS__  // we should also check STDC version. later, later..
+#ifdef __STDC_NO_ATOMICS__  /* we should also check STDC version. later, later.. */
 
 #error "nvwal_atomics.h without C11 is not yet implemented..."
-// We will add such an implementation when we really need.
-// Will use GCC's traditional sync_xxx functions?
+/*
+ * We will add such an implementation when we really need.
+ * Will use GCC's traditional sync_xxx functions?
+ */
 
-#else  // __STDC_NO_ATOMICS__
+#else  /* __STDC_NO_ATOMICS__ */
 
 #include <stdatomic.h>
 
@@ -97,7 +99,7 @@ typedef enum {
 
 #define nvwal_atomic_thread_fence(ORD) atomic_thread_fence(ORD)
 
-#endif  // __STDC_NO_ATOMICS__
+#endif  /* __STDC_NO_ATOMICS__ */
 
 /** And a few, implementation-agnostic shorthand. */
 
@@ -112,4 +114,4 @@ typedef enum {
 
 /** @} */
 
-#endif  // NVWAL_ATOMICS_H_
+#endif  /* NVWAL_ATOMICS_H_ */

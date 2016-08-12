@@ -320,4 +320,4 @@ struct nvwal_context {
 
 /** @} */
 
-#endif  // NVWAL_TYPES_H_
+#endif  /* NVWAL_TYPES_H_ */

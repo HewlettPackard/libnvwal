@@ -26,4 +26,4 @@ struct nvwal_config;
 struct nvwal_context;
 struct nvwal_log_segment;
 struct nvwal_writer_context;
-#endif  // NVWAL_FWD_H_
+#endif  /* NVWAL_FWD_H_ */

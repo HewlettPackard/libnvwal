@@ -70,4 +70,4 @@ inline nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param)
 
 /** @} */
 
-#endif  // NVWAL_UTIL_H_
+#endif  /* NVWAL_UTIL_H_ */

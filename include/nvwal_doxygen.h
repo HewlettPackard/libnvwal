@@ -30,4 +30,4 @@
  * @details
  * Bluh
  */
-#endif  // NVWAL_DOXYGEN_H_
+#endif  /* NVWAL_DOXYGEN_H_ */

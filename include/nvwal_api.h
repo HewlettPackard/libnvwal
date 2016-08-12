@@ -28,6 +28,11 @@
 #include "nvwal_fwd.h"
 #include "nvwal_types.h"
 
+#ifdef __cplusplus
+/* All API functions must be extern-C to be used from C and C++ */
+extern "C" {
+#endif  /* __cplusplus */
+
 /**
  * DESCRIBE ME.
  * @param[in] config DESCRIBE ME
@@ -82,13 +87,17 @@ nvwal_error_t nvwal_on_wal_write(
  */
 nvwal_error_t nvwal_assure_writer_space(
   struct nvwal_writer_context* writer);
-//  uint64_t size_to_write);  // no need for this param, right? or is it some kind of hint?
+/* uint64_t size_to_write);  // no need for this param, right? or is it some kind of hint? */
 
 /** Is this needed? Or can we just read wal->durable? */
 nvwal_error_t nvwal_query_durable_epoch(
   struct nvwal_context* wal,
   nvwal_epoch_t* out);
 
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
+
 /** @} */
 
-#endif  // NVWAL_API_H_
+#endif  /* NVWAL_API_H_ */
