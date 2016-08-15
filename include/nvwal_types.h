@@ -90,7 +90,7 @@
  * HE is an epoch larger than NE. libnvwal currently does not allow submitting
  * a log in this epoch. If a worker thread does it, the thread gets synchronously waited.
  *
- * @par Examples
+ * @par Examples of DE, SE, NE relationship
  * \li DE = SE = NE : Idle. Probably this happens only at start up.
  * libnvwal is not allowed to write out anything, and everything seems already durable.
  * \li DE = SE < NE : Most common case. Flusher is well catching up and writing out
@@ -120,6 +120,30 @@
  * Based on this guarantee, many modules in libnvwal have circular windows
  * of epochs with 5 or 6 slots. They do not need to maintain any information
  * older or newer than that.
+ *
+ * @par Translating epochs to user applications
+ * Applications have varying mappings between their own notiion of timestamp
+ * and libnvwal's epochs. We carefully designed our epochs so that all
+ * existing database architectures can be mapped to epochs as below.
+ *
+ * @par Application 1 : Epoch-based databases
+ * Epoch-based databases, such as FOEDUS/SILO etc, are mapped to libnvwal's
+ * epochs without any hassle. Some architecture might not differentiate DE/SE/NE,
+ * but all of them are based on epochs.
+ * \li Call nvwal_advance_next_epoch() whenever the new epoch might come in to the system.
+ * \li Call nvwal_advance_stable_epoch() whenever the client wants to advance its own epoch
+ * and then call nvwal_query_durable_epoch() and sleep/spin on it.
+ *
+ * @par Application 2 : LSN-based databases
+ * LSN based databases, such as MySQL/PostgreSQL etc, are mapped to libnvwal
+ * by considering every transaction as an epoch.
+ * \li LSN-based single-log-stream databases allocate only one writer in libnvwal.
+ * Thus many things are simpler.
+ * \li Whenever the application requests to make a commit log record of a transaction
+ * durable, call nvwal_advance_stable_epoch(). The epoch and the LSN of the commit log
+ * record have one-to-one monotonically increasing relationship.
+ * \li We also allow binary-searching our epoch metadata array, assuming the above relationship.
+ * For this purpose, we maintain one user-defined additional version tag in our metadata.
  *
  * @par Wrap-around
  * We might run out of 2^64 epochs at some point.
