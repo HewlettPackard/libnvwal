@@ -30,8 +30,112 @@
 
 #include "nvwal_fwd.h"
 
-/** DESCRIBE ME */
+/**
+ * @brief \b Epoch, a coarse-grained timestamp libnvwal is based on.
+ * @details
+ * Epoch is the most important concept in libnvwal.
+ * Most feature in libnvwal is provided on top of epochs.
+ *
+ * @par What is Epoch
+ * An Epoch represents a \b user-defined duration of time.
+ * Depending on the type of client applications, it might be just one transaction,
+ * 10s of milliseconds, or something else. Will talk about each application later.
+ * In either case, it is coarse-grained, not like a nanosecond or RDTSC.
+ * An epoch contains some number of log entries, ranging from 1 to millions or more.
+ * Each log entry always belongs to exactly one epoch, which represents
+ * \b when the log is written and becomes durable.
+ *
+ * @par Log ordering invariant
+ * libnvwal always writes logs out to stable storage per epoch.
+ * We durably write out logs of epoch E, then epoch E+1, etc.
+ * When the user requests to read back logs,
+ * we always guarantee that logs are ordered by epochs.
+ * Logs in the same epoch might be not in real-time order, but they
+ * do have some guarantee. See the corresponding API.
+ *
+ * @par Concept: Durable Epoch (DE)
+ * \b Durable \b Epoch (\b DE) is the epoch upto which all logs in the epoch
+ * are already durably written at least to NVDIMM. No log entries in DE
+ * can be newly submit to libnvwal.
+ * libnvwal provides an API, nvwal_query_durable_epoch(), to atomically
+ * check the current value of DE of the system.
+ *
+ * @par Concept: Stable Epoch (SE)
+ * \b Stable \b Epoch (\b SE) is the epoch upto which all logs in the epoch
+ * are already submit to libnvwal.
+ * No log entries in SE can be newly submit to libnvwal.
+ * SE is equal to either DE or DE+1.
+ * \li When libnvwal's flusher is well catching up, SE == DE in most of the time.
+ * \li When workers are waiting for libnvwal's flusher, SE == DE+1.
+ * As soon as the flusher completes writing, flushing, metadata-update, etc, it will
+ * bump up DE for one, thus switching to another case.
+ *
+ * @par Concept: Next Epoch (NE)
+ * \b Next \b Epoch (\b NE) is the epoch whose logs are ready
+ * to be written out to durable storages.
+ * NE is equal to either SE or SE+1.
+ * NE is a hint for libnvwal to utilize storage bandwidth while waiting for flusher
+ * and easily keep the log ordering invariant.
+ * \li When NE == SE+1, libnvwal is allowed to go ahead and write out logs in NE
+ * ahead of the flusher being asked to complete SE. All the logs in SE must be
+ * already written out, whether durably or not.
+ * \li When NE == SE, libnvwal just writes out logs in SE to complete the epoch.
+ *
+ * Even if there are logs in NE + 1, libnvwal does NOT write them out.
+ * We can potentially provide the epoch-by-epoch guarantee without this restriction,
+ * but things are much simpler this way. libnvwal handles up to 3 or 4 epochs always.
+ *
+ * @par Concept: Horizon Epoch (HE)
+ * \b Horizon \b Epoch (\b HE) is a mostly conceptual epoch \b we \b don't \b care.
+ * HE is an epoch larger than NE. libnvwal currently does not allow submitting
+ * a log in this epoch. If a worker thread does it, the thread gets synchronously waited.
+ *
+ * @par Examples
+ * \li DE = SE = NE : Idle. Probably this happens only at start up.
+ * libnvwal is not allowed to write out anything, and everything seems already durable.
+ * \li DE = SE < NE : Most common case. Flusher is well catching up and writing out
+ * logs in NE well ahead, fully utilizing memory/storage bandwidth.
+ * \li DE < SE = NE : Second most common case. The client application has requested
+ * to bump up SE and then DE. Flusher is completing remaining writes in SE and then
+ * will make sure the writes are durable as well as our internal metadata is
+ * atomically written.
+ * \li DE < SE < NE : A bit advanced case.
+ * All log writes in SE must be already done, but the flusher might be still waiting
+ * for the return of fsync, etc. In the meantime, we can go ahead and start writing logs in NE.
+ * To make this case useful, the flusher must have a separate fsync-thread,
+ * which we currently do not have. We might do this in future, though.
+ *
+ * @par Current XXX Epoch
+ * The above epochs are globally meaningful concepts.
+ * However, libnvwal involves various threads that must be as indepent as possible
+ * for scalability. We can not and should not pause all of them whenever
+ * we advance the global epochs.
+ * Rather, each thread often maintains its own view of currently active epochs.
+ * They sometime lag behind, or even have some holes (eg. no logs received for an epoch).
+ * Current XXX Epoch is the oldest epoch XXX (some module/thread) is taking care of.
+ * Probably it is same as the global DE. It might be occasionally DE - 1.
+ * It's asynchronously and indepently maintained by XXX to catch up with the global epochs.
+ * One very helpful guarantee here is that there is no chance XXX has to handle
+ * DE-2 or DE+3 thanks to how we advance DE, and that HE is not allowed to submit.
+ * Based on this guarantee, many modules in libnvwal have circular windows
+ * of epochs with 5 or 6 slots. They do not need to maintain any information
+ * older or newer than that.
+ *
+ * @par Wrap-around
+ * We might run out of 2^64 epochs at some point.
+ * Wrap-around is implemented as below.
+ * \li We \b somehow guarantee that no two epochs
+ *  in the system are more than 2^63 distant.
+ * \li Thus, similarly to RFC 1982, a is after b \e iff
+ * (b < a < b+2^63) or (a < b < a+2^63).
+ * \li If the system is running for looong time (>2^63), we need
+ * to provide a compaction tool to modify epoch values in
+ * our metadata store. This piece is to be designed/implemented.
+ * We will need it much much later.
+ * @see nvwal_is_epoch_after()
+ */
 typedef uint64_t  nvwal_epoch_t;
+
 /** DESCRIBE ME */
 typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */

@@ -94,6 +94,19 @@ nvwal_error_t nvwal_query_durable_epoch(
   struct nvwal_context* wal,
   nvwal_epoch_t* out);
 
+/**
+ * @returns whether left epoch is after right epoch
+ * @see see http://en.wikipedia.org/wiki/Serial_number_arithmetic
+ * @details
+ * Do NOT use straightforward "left < right". We must be wrap-around-aware.
+ * Equality is fine.
+ */
+inline bool nvwal_is_epoch_after(nvwal_epoch_t left, nvwal_epoch_t right) {
+  /** see http://en.wikipedia.org/wiki/Serial_number_arithmetic */
+  uint64_t diff = left - right;
+  return (diff != 0) && (diff < (1ULL << 63));
+}
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */
