@@ -57,6 +57,7 @@ target_link_libraries(nvwal-static ${NUMA_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 target_link_libraries(nvwal-shared ${NUMA_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
 add_subdirectory(test)
+add_subdirectory(third_party)
 
 #############################################################################
 #
