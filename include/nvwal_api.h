@@ -75,36 +75,67 @@ nvwal_error_t nvwal_flusher_main(
   struct nvwal_context* wal);
 
 /**
- * DESCRIBE ME.
+ * @brief Notifies libnvwal of a region of written logs in the given writer's log buffer.
+ * @param[in] writer the writer that represents the calling thread itself
+ * @param[in] bytes_written number of bytes written since the previous call
+ * @param[in] log_epoch epoch of all log entries in the given region.
+ * The log_epoch must not be too new (SE + 2 or larger).
+ * Also, the given epoch must be increasing. Once you give 100, you can't give 99 or 98,
+ * except wrap-around case.
+ * @invariant log_epoch > stable epoch (SE)  ; otherwise the client application violated
+ * the contract on advancing SE.
+ *
  */
 nvwal_error_t nvwal_on_wal_write(
   struct nvwal_writer_context* writer,
   uint64_t bytes_written,
-  nvwal_epoch_t current);
+  nvwal_epoch_t log_epoch);
+
+/**
+ * @returns.Whether the writer has plenty of space left in the buffer.
+ * When this returns false, the caller in client application should
+ * wait until it becomes true. It is left the client application
+ * whether to sleep, spin, or do something in the meantime.
+ */
+bool nvwal_has_enough_writer_space(
+  struct nvwal_writer_context* writer);
 
 /**
  * DESCRIBE ME.
  */
-nvwal_error_t nvwal_assure_writer_space(
-  struct nvwal_writer_context* writer);
-/* uint64_t size_to_write);  // no need for this param, right? or is it some kind of hint? */
-
-/** Is this needed? Or can we just read wal->durable? */
 nvwal_error_t nvwal_query_durable_epoch(
   struct nvwal_context* wal,
   nvwal_epoch_t* out);
 
 /**
- * @returns whether left epoch is after right epoch
+ * @returns whether left > right in wrap-around-aware fashion
  * @see see http://en.wikipedia.org/wiki/Serial_number_arithmetic
  * @details
- * Do NOT use straightforward "left < right". We must be wrap-around-aware.
+ * Do NOT use straightforward "left > right". We must be wrap-around-aware.
  * Equality is fine.
  */
 inline bool nvwal_is_epoch_after(nvwal_epoch_t left, nvwal_epoch_t right) {
   /** see http://en.wikipedia.org/wiki/Serial_number_arithmetic */
   uint64_t diff = left - right;
   return (diff != 0) && (diff < (1ULL << 63));
+}
+/** @see nvwal_is_epoch_after */
+inline bool nvwal_is_epoch_equal_or_after(nvwal_epoch_t left, nvwal_epoch_t right) {
+  return left == right || nvwal_is_epoch_after(left, right);
+}
+
+/**
+ * @returns The epoch next to the given epoch.
+ * @details
+ * Do NOT use straightforward "++epoch". We must skip kNvwalInvalidEpoch on wrap-around.
+ */
+inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
+  nvwal_epoch_t ret = epoch + 1ULL;
+  if (ret == kNvwalInvalidEpoch) {
+    return ret + 1ULL;
+  } else {
+    return ret;
+  }
 }
 
 #ifdef __cplusplus

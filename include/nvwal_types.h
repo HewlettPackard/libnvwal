@@ -160,6 +160,13 @@
  */
 typedef uint64_t  nvwal_epoch_t;
 
+/**
+ * This value of epoch is reserved for null/invalid/etc.
+ * Thus, when we increment an epoch, we must be careful.
+ * @see nvwal_increment_epoch()
+ */
+const nvwal_epoch_t kNvwalInvalidEpoch = 0;
+
 /** DESCRIBE ME */
 typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
@@ -195,6 +202,16 @@ enum nvwal_constants {
    * 32MB sounds like a good place to start?
    */
   kNvwalSegmentSize = 1ULL << 25,
+
+  /**
+   * \li [oldest] : the oldest frame this writer \e might be using.
+   * It is probably the global durable epoch, or occasionally older.
+   * \li [oldest + 1, 2]: frames this writer \e might be using now.
+   * \li [oldest + 3, 4]: guaranteed to be currently not used by this writer.
+   * Thus, even when current_epoch_frame might be now bumped up for one, it is
+   * safe to reset [oldest + 4]. This is why we have 5 frames.
+   */
+  kNvwalEpochFrameCount = 5,
 };
 
 
@@ -279,46 +296,42 @@ struct nvwal_config {
 };
 
 /**
- * These two structs, nvwal_buffer_control_block and nvwal_writer_context are used to
- * communicate between a writer thread and the flusher thread, keeping track of
- * the status of one writer's volatile buffer. The offsets follow this
- * logical ordering:
+ * @brief Represents a region in a writer's private log buffer for one epoch
+ * @details
+ * nvwal_writer_context maintains a circular window of this object to
+ * communicate with the flusher thread, keeping track of
+ * the status of one writer's volatile buffer.
  *
- *     head <= durable <= copied <= complete <= tail
- *
- * These inequalities might not hold on the numeric values of the offsets
- * because the buffer is circular. Instead, we should first define the notion of
- * "circular size":
- *
- *    circular_size(x,y,size) (y >= x ? y - x : y + size - x)
- *
- * This gives the number of bytes between x and y in a circular buffer. If
- * x == y, the buffer is empty. If y < x, the buffer has wrapped around the end
- * point, and so we count the bytes from 0 to y and from x to size, which
- * gives y + size - x. This type of buffer can never actually hold "size" bytes
- * as there must always be one empty cell between the tail and the head.
- *
- * Then the logical pointer relationship a <= b can be tested as:
- *
- *    circular_size(head, a, size) <= circular_size(head, b, size)
+ * This object represents the writer's log region in one epoch,
+ * consisting of two offsets. These offsets might wrap around.
+ * head==offset iff there is no log in the epoch.
+ * To guarantee this, we make sure the buffer never becomes really full.
  *
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing.
  */
-struct nvwal_buffer_control_block {
-  /** Updated by writer via nvwal_on_wal_write() and read by flusher thread.  */
+struct nvwal_writer_epoch_frame {
+  /**
+   * Inclusive beginning offset in buffer marking where logs in this epoch start.
+   * Always written by the writer itself only. Always read by the flusher only.
+   */
+  uint64_t head_offset;
 
-  /** Where the writer will put new bytes - we don't currently read this */
-  uint64_t tail;
+  /**
+   * Exclusive ending offset in buffer marking where logs in this epoch end.
+   * Always written by the writer itself only. Read by the flusher and the writer.
+   */
+  uint64_t tail_offset;
 
-  /** Beginning of completely written bytes */
-  uint64_t head;
-
-  /** End of completely written bytes */
-  uint64_t complete;
-
-  /** max of epochs seen by on_wal_write() */
-  nvwal_epoch_t latest_written;
+  /**
+   * The epoch this frame currently represents. As these frames are
+   * reused in a circular fashion, it will be reset to kNvwalInvalidEpoch
+   * when it is definitely not used, and then reused.
+   * Loading/storing onto this variable must be careful on memory ordering.
+   *
+   * Always written by the writer itself only. Read by the flusher and the writer.
+   */
+  nvwal_epoch_t log_epoch;
 };
 
 /**
@@ -334,30 +347,52 @@ struct nvwal_writer_context {
   struct nvwal_context* parent;
 
   /**
+   * Circular frames of this writer's offset marks.
+   * @see kNvwalEpochFrameCount
+   */
+  struct nvwal_writer_epoch_frame epoch_frames[kNvwalEpochFrameCount];
+
+  /**
+   * Points to the oldest frame this writer is aware of.
+   * This variable is written by the flusher only.
+   * @invariant epoch_frames[oldest_frame].log_epoch != kNvwalInvalidEpoch.
+   * To satisfy this invariant, we initialize all writers' first frame during initialization.
+   */
+  uint32_t oldest_frame;
+
+  /**
+   * Points to the newest frame this writer is using, which is also the only frame
+   * this writer is now putting logs to.
+   * This variable is read/written by the writer only.
+   * @invariant epoch_frames[active_frame].log_epoch != kNvwalInvalidEpoch.
+   * To satisfy this invariant, we initialize all writers' first frame during initialization.
+   */
+  uint32_t active_frame;
+
+  /**
    * Sequence unique among the same parent WAL context, 0 means the first writer.
    * This is not unique among writers on different WAL contexts,
    * @invariant this == parent->writers + writer_seq_id
    */
   uint32_t writer_seq_id;
 
-  struct nvwal_buffer_control_block cb;
-
   /**
-    * Everything up to this point is durable. It is safe for the application
-    * to move the head up to this point.
-    */
-  uint64_t flushed;
+   * This is read/written only by the writer itself, not from the flusher.
+   * This is just same as the value of tail_offset in the last active frame.
+   * We duplicate it here to ease maitaining the tail value, especially when we are
+   * making a new frame.
+   */
+  uint64_t last_tail_offset;
 
   /**
     * Everything up to this point has been copied by the flusher thread but
-    * might not yet be durable
+    * might not yet be durable.
+    * Pending work is everything between copied and writer->complete.
     */
-  uint64_t copied;
+  uint64_t copied_offset;
 
   /** Shorthand for parent->config.writer_buffers[writer_seq_id] */
   nvwal_byte_t* buffer;
-
-  /** Pending work is everything between copied and writer->complete */
 };
 
 /**

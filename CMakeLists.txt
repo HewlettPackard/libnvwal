@@ -30,7 +30,7 @@ find_package(Numa REQUIRED)
 # We also need pthread. Note that linking against libstdc with C++11 flag is not enough.
 find_package(Threads REQUIRED)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11 -pthread -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -fno-pie -Wall")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11 -pthread -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -fno-strict-aliasing -fno-pie -Wall")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fno-pie")
 
 # TODO, we should move all .h to /include. Now under surgery..

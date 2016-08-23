@@ -31,31 +31,6 @@
 
 #include "nvwal_types.h"
 
-#define CHECK_FD_VALID(fd)                             \
-    do {                                                \
-        if(fd < 0) {                                    \
-            perror( "Invalid fd in "                    \
-                    __FUNCTION__ ":" __LINE__ " ");     \
-            exit(-1);                                   \
-        }                                               \
-    } while(0)
-
-#define CHECK_NO_ERROR(err)                                            \
-    do {                                                                \
-        if(err) {                                                       \
-            perror( "Error in " __FUNCTION__ ":" __LINE__ " :");        \
-            exit(-1);                                                   \
-        }                                                               \
-    } while(0)
-
-#define POINTER_AHEAD(ptr1, ptr2, start, size)                          \
-    (((start) <= (ptr1) ? (ptr1)-(start) : (ptr1)+(size)-(start)) >     \
-     ((start) <= (ptr2) ? (ptr2)-(start) : (ptr2)+(size)-(start)))
-
-#define CIRCULAR_SIZE(start, end, size)                         \
-    ((start) <= (end) ? (end)-(start) : (end)+(size)-(start))
-
-
 inline nvwal_error_t nvwal_raise_einval(const char* message) {
   fprintf(stderr, message);
   errno = EINVAL;
