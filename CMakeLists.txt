@@ -49,6 +49,7 @@ include(CTest)
 
 set(WAL_SOURCE_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_api.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_mds.c
   )
 
 add_library(nvwal-static STATIC ${WAL_SOURCE_FILES})
