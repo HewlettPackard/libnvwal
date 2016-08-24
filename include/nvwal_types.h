@@ -172,7 +172,7 @@ typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
 typedef int8_t    nvwal_byte_t;
 
-enum nvwal_constants {
+enum NvwalConstants {
   /**
    * Throughout this library, every file path must be represented within this length,
    * including null termination and serial path suffix.
@@ -226,7 +226,7 @@ enum nvwal_seg_state_t {
 };
 
 /** Ignored. */
-enum nvwal_config_flags {
+enum NvwalConfig_flags {
     BG_FSYNC_THREAD = 1 << 0,
     MMAP_DISK_FILE  = 1 << 1,
     CIRCULAR_LOG    = 1 << 2
@@ -237,53 +237,53 @@ enum nvwal_config_flags {
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing.
  */
-struct nvwal_config {
+struct NvwalConfig {
   /**
    * Null-terminated string of folder to NVDIMM storage, under which
    * this WAL instance will write out log files at first.
    * If this string is not null-terminated, nvwal_init() will return an error.
    */
-  char nv_root[kNvwalMaxPathLength];
+  char nv_root_[kNvwalMaxPathLength];
 
   /**
    * Null-terminated string of folder to block storage, into which
    * this WAL instance will copy log files from NVDIMM storage.
    * If this string is not null-terminated, nvwal_init() will return an error.
    */
-  char block_root[kNvwalMaxPathLength];
+  char block_root_[kNvwalMaxPathLength];
 
   /**
    * When this is a second run or later, give the definitely-durable epoch
    * as of starting.
    */
-  nvwal_epoch_t resuming_epoch;
+  nvwal_epoch_t resuming_epoch_;
 
-  uint32_t numa_domain;
+  uint32_t numa_domain_;
 
   /**
    * Number of log writer threads on this WAL instance.
    * This value must be kNvwalMaxWorkers or less.
    * Otherwise, nvwal_init() will return an error.
    */
-  uint32_t writer_count;
+  uint32_t writer_count_;
 
   /** How big our nvram segments are */
-  uint64_t nv_seg_size;
-  uint64_t nv_quota;
+  uint64_t nv_seg_size_;
+  uint64_t nv_quota_;
 
   /** Assumed to be the same as nv_seg_size for now */
-  uint64_t block_seg_size;
+  uint64_t block_seg_size_;
 
   /** Size of (volatile) buffer for each writer-thread. */
-  uint64_t writer_buffer_size;
+  uint64_t writer_buffer_size_;
 
   /**
     * How many on-disk log segments to create a time (empty files)
     * This reduces the number of times we have to fsync() the directory
     */
-  uint32_t prealloc_file_count;
+  uint32_t prealloc_file_count_;
 
-  uint64_t option_flags;
+  uint64_t option_flags_;
 
   /**
    * Buffer of writer_buffer_size bytes for each writer-thread,
@@ -292,13 +292,13 @@ struct nvwal_config {
    * If any of writer_buffers[0] to writer_buffers[writer_count - 1]
    * is null, nvwal_init() will return an error.
    */
-  nvwal_byte_t* writer_buffers[kNvwalMaxWorkers];
+  nvwal_byte_t* writer_buffers_[kNvwalMaxWorkers];
 };
 
 /**
  * @brief Represents a region in a writer's private log buffer for one epoch
  * @details
- * nvwal_writer_context maintains a circular window of this object to
+ * NvwalWriterContext maintains a circular window of this object to
  * communicate with the flusher thread, keeping track of
  * the status of one writer's volatile buffer.
  *
@@ -310,18 +310,18 @@ struct nvwal_config {
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing.
  */
-struct nvwal_writer_epoch_frame {
+struct NvwalWriterEpochFrame {
   /**
    * Inclusive beginning offset in buffer marking where logs in this epoch start.
    * Always written by the writer itself only. Always read by the flusher only.
    */
-  uint64_t head_offset;
+  uint64_t head_offset_;
 
   /**
    * Exclusive ending offset in buffer marking where logs in this epoch end.
    * Always written by the writer itself only. Read by the flusher and the writer.
    */
-  uint64_t tail_offset;
+  uint64_t tail_offset_;
 
   /**
    * The epoch this frame currently represents. As these frames are
@@ -331,7 +331,7 @@ struct nvwal_writer_epoch_frame {
    *
    * Always written by the writer itself only. Read by the flusher and the writer.
    */
-  nvwal_epoch_t log_epoch;
+  nvwal_epoch_t log_epoch_;
 };
 
 /**
@@ -342,15 +342,15 @@ struct nvwal_writer_epoch_frame {
  * this object just point to an existing buffer, in other words they
  * are just markers (TODO: does it have to be a pointer? how about offset).
  */
-struct nvwal_writer_context {
+struct NvwalWriterContext {
   /** Back pointer to the parent WAL context. */
-  struct nvwal_context* parent;
+  struct NvwalContext* parent_;
 
   /**
    * Circular frames of this writer's offset marks.
    * @see kNvwalEpochFrameCount
    */
-  struct nvwal_writer_epoch_frame epoch_frames[kNvwalEpochFrameCount];
+  struct NvwalWriterEpochFrame epoch_frames_[kNvwalEpochFrameCount];
 
   /**
    * Points to the oldest frame this writer is aware of.
@@ -358,7 +358,7 @@ struct nvwal_writer_context {
    * @invariant epoch_frames[oldest_frame].log_epoch != kNvwalInvalidEpoch.
    * To satisfy this invariant, we initialize all writers' first frame during initialization.
    */
-  uint32_t oldest_frame;
+  uint32_t oldest_frame_;
 
   /**
    * Points to the newest frame this writer is using, which is also the only frame
@@ -367,14 +367,14 @@ struct nvwal_writer_context {
    * @invariant epoch_frames[active_frame].log_epoch != kNvwalInvalidEpoch.
    * To satisfy this invariant, we initialize all writers' first frame during initialization.
    */
-  uint32_t active_frame;
+  uint32_t active_frame_;
 
   /**
    * Sequence unique among the same parent WAL context, 0 means the first writer.
    * This is not unique among writers on different WAL contexts,
    * @invariant this == parent->writers + writer_seq_id
    */
-  uint32_t writer_seq_id;
+  uint32_t writer_seq_id_;
 
   /**
    * This is read/written only by the writer itself, not from the flusher.
@@ -382,17 +382,17 @@ struct nvwal_writer_context {
    * We duplicate it here to ease maitaining the tail value, especially when we are
    * making a new frame.
    */
-  uint64_t last_tail_offset;
+  uint64_t last_tail_offset_;
 
   /**
     * Everything up to this point has been copied by the flusher thread but
     * might not yet be durable.
     * Pending work is everything between copied and writer->complete.
     */
-  uint64_t copied_offset;
+  uint64_t copied_offset_;
 
   /** Shorthand for parent->config.writer_buffers[writer_seq_id] */
-  nvwal_byte_t* buffer;
+  nvwal_byte_t* buffer_;
 };
 
 /**
@@ -400,31 +400,31 @@ struct nvwal_writer_context {
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing \b except \b file \b descriptors.
  */
-struct nvwal_log_segment {
-  nvwal_byte_t* nv_baseaddr;
+struct NvwalLogSegment {
+  nvwal_byte_t* nv_baseaddr_;
 
   /** On-disk sequence number, identifies filename */
-  uint64_t seq;
-  int32_t nvram_fd;
-  int32_t disk_fd;
-  uint64_t disk_offset;
+  uint64_t seq_;
+  int32_t nvram_fd_;
+  int32_t disk_fd_;
+  uint64_t disk_offset_;
 
   /** May be used for communication between flusher thread and fsync thread */
-  enum nvwal_seg_state_t state;
+  enum nvwal_seg_state_t state_;
 
   /** true if direntry of disk_fd is durable */
-  bool dir_synced;
+  bool dir_synced_;
 };
 
 /**
  * @brief Represents a context of \b one stream of write-ahead-log placed in
  * NVDIMM and secondary device.
  * @details
- * Each nvwal_context instance must be initialized by nvwal_init() and cleaned up by
+ * Each NvwalContext instance must be initialized by nvwal_init() and cleaned up by
  * nvwal_uninit().
  * Client programs that do distributed logging will instantiate
  * an arbitrary number of this context, one for each log stream.
- * There is no interection between two nvwal_context from libnvwal's standpoint.
+ * There is no interection between two NvwalContext from libnvwal's standpoint.
  * It's the client program's responsibility to coordinate them.
  *
  * @note This object is a POD. It can be simply initialized by memzero,
@@ -433,53 +433,53 @@ struct nvwal_log_segment {
  * We recommend allocating this object on heap rather than on stack. Although
  * it's very unlikely to have this long-living object on stack anyways (unit test?)..
  */
-struct nvwal_context {
-  nvwal_epoch_t durable;
-  nvwal_epoch_t latest;
+struct NvwalContext {
+  nvwal_epoch_t durable_;
+  nvwal_epoch_t latest_;
 
   /**
    * All static configurations given by the user on initializing this WAL instance.
    * Once constructed, this is/must-be const. Do not modify it yourself!
    */
-  struct nvwal_config config;
+  struct NvwalConfig config_;
 
   /**
    * DESCRIBE ME
    */
-  uint32_t num_active_segments;
+  uint32_t num_active_segments_;
 
   /**
    * DESCRIBE ME
    */
-  struct nvwal_log_segment active_segments[kNvwalMaxActiveSegments];
+  struct NvwalLogSegment active_segments_[kNvwalMaxActiveSegments];
 
-  int32_t log_root_fd;
+  int32_t log_root_fd_;
 
   /** 0 if append-only log */
-  uint64_t max_log_size;
+  uint64_t max_log_size_;
 
   /** Next on-disk sequence number, see log_segment.seq  */
-  uint64_t log_sequence;
+  uint64_t log_sequence_;
 
   /** mmapped address of current nv segment*/
-  nvwal_byte_t* cur_region;
+  nvwal_byte_t* cur_region_;
 
   /** Index into nv_region */
-  uint64_t nv_offset;
+  uint64_t nv_offset_;
 
   /** Index into segment[] */
-  uint32_t cur_seg_idx;
+  uint32_t cur_seg_idx_;
 
-  struct nvwal_writer_context writers[kNvwalMaxWorkers];
+  struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 
   /**
    * Used to inform the flusher that nvwal_uninit() was invoked.
    */
-  uint8_t flusher_stop_requested;
+  uint8_t flusher_stop_requested_;
   /**
    * Set when the flusher thread started running.
    */
-  uint8_t flusher_running;
+  uint8_t flusher_running_;
 };
 
 /** @} */

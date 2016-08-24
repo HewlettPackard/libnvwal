@@ -30,7 +30,7 @@
 #include "nvwal_util.h"
 
 void init_nvram_segment(
-  struct nvwal_context * wal,
+  struct NvwalContext * wal,
   int root_fd,
   int i);
 
@@ -40,71 +40,73 @@ void init_nvram_segment(
  *
  ***************************************************************************/
 nvwal_error_t nvwal_init(
-  const struct nvwal_config* config,
-  struct nvwal_context* wal) {
+  const struct NvwalConfig* config,
+  struct NvwalContext* wal) {
   int nv_root_fd;
   int block_root_fd;
   uint32_t i;
+  struct NvwalWriterContext* writer;
 
   memset(wal, 0, sizeof(*wal));
-  memcpy(&wal->config, config, sizeof(*config));
+  memcpy(&wal->config_, config, sizeof(*config));
 
-  if (strnlen(config->nv_root, kNvwalMaxPathLength) >= kNvwalMaxPathLength) {
+  if (strnlen(config->nv_root_, kNvwalMaxPathLength) >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: nv_root must be null terminated\n");
-  } else if (strnlen(config->block_root, kNvwalMaxPathLength) >= kNvwalMaxPathLength) {
+  } else if (strnlen(config->block_root_, kNvwalMaxPathLength) >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: block_root must be null terminated\n");
-  } else if (config->writer_count == 0 || config->writer_count > kNvwalMaxWorkers) {
+  } else if (config->writer_count_ == 0 || config->writer_count_ > kNvwalMaxWorkers) {
     return nvwal_raise_einval_llu(
       "Error: writer_count must be 1 to %llu\n",
       kNvwalMaxWorkers);
-  } else if ((config->writer_buffer_size % 512U) || config->writer_buffer_size == 0) {
+  } else if ((config->writer_buffer_size_ % 512U) || config->writer_buffer_size_ == 0) {
     return nvwal_raise_einval(
       "Error: writer_buffer_size must be a non-zero multiple of page size (512)\n");
   }
 
-  for (i = 0; i < config->writer_count; ++i) {
-    if (!config->writer_buffers[i]) {
+  for (i = 0; i < config->writer_count_; ++i) {
+    if (!config->writer_buffers_[i]) {
       return nvwal_raise_einval_llu(
         "Error: writer_buffers[ %llu ] is null\n",
         i);
     }
   }
 
-  wal->num_active_segments = config->nv_quota / kNvwalSegmentSize;
-  if (config->nv_quota % kNvwalSegmentSize) {
+  wal->num_active_segments_ = config->nv_quota_ / kNvwalSegmentSize;
+  if (config->nv_quota_ % kNvwalSegmentSize) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be a multiple of %llu\n",
       kNvwalSegmentSize);
-  } else if (wal->num_active_segments < 2U) {
+  } else if (wal->num_active_segments_ < 2U) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be at least %llu\n",
       2ULL * kNvwalSegmentSize);
-  } else if (wal->num_active_segments > kNvwalMaxActiveSegments) {
+  } else if (wal->num_active_segments_ > kNvwalMaxActiveSegments) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be at most %llu\n",
       (uint64_t) kNvwalMaxActiveSegments * kNvwalSegmentSize);
   }
 
-  wal->durable = config->resuming_epoch;
-  wal->latest = config->resuming_epoch;
+  wal->durable_ = config->resuming_epoch_;
+  wal->latest_ = config->resuming_epoch_;
 
-  for (i = 0; i < config->writer_count; ++i) {
-    wal->writers[i].parent = wal;
-    wal->writers[i].oldest_frame = 0;
-    wal->writers[i].active_frame = 0;
-    wal->writers[i].writer_seq_id = i;
-    wal->writers[i].last_tail_offset = 0;
-    wal->writers[i].copied_offset = 0;
-    wal->writers[i].buffer = config->writer_buffers[i];
-    memset(wal->writers[i].epoch_frames, 0, sizeof(wal->writers[i].epoch_frames));
-    wal->writers[i].epoch_frames[0].log_epoch = config->resuming_epoch;
+  for (i = 0; i < config->writer_count_; ++i) {
+    writer = wal->writers_ + i;
+    writer->parent_ = wal;
+    writer->oldest_frame_ = 0;
+    writer->active_frame_ = 0;
+    writer->writer_seq_id_ = i;
+    writer->last_tail_offset_ = 0;
+    writer->copied_offset_ = 0;
+    writer->buffer_ = config->writer_buffers_[i];
+    memset(writer->epoch_frames_, 0, sizeof(writer->epoch_frames_));
+    writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
   }
 
-  nv_root_fd = open(config->nv_root, 0);
+  nv_root_fd = open(config->nv_root_, 0);
 
   /* Initialize all nv segments */
 
-  for (i = 0; i < wal->num_active_segments; ++i) {
+  for (i = 0; i < wal->num_active_segments_; ++i) {
     init_nvram_segment(wal, nv_root_fd, i);
   }
 
@@ -113,9 +115,9 @@ nvwal_error_t nvwal_init(
 
   close(nv_root_fd);
 
-  block_root_fd = open(config->block_root, 0);
+  block_root_fd = open(config->block_root_, 0);
 
-  wal->log_root_fd = block_root_fd;
+  wal->log_root_fd_ = block_root_fd;
 
   return 0;
 }
@@ -127,11 +129,11 @@ nvwal_error_t nvwal_init(
  ***************************************************************************/
 
 nvwal_error_t nvwal_uninit(
-  struct nvwal_context* wal) {
+  struct NvwalContext* wal) {
 
-  if (nvwal_atomic_load(&(wal->flusher_running)) != 0) {
-    nvwal_atomic_store(&(wal->flusher_stop_requested), 1U);
-    while (nvwal_atomic_load(&(wal->flusher_running)) != 0) {
+  if (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
+    nvwal_atomic_store(&(wal->flusher_stop_requested_), 1U);
+    while (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
       /** TODO Should have a sleep or at least yield */
       /* NOTE: Do we need to kick the flusher one more time or should we assume
        * assume the application's writer threads are responsible enough to 
@@ -150,11 +152,11 @@ nvwal_error_t nvwal_uninit(
  ***************************************************************************/
 
 void assert_writer_current_frames(
-  const struct nvwal_writer_context* writer) {
-  assert(writer->oldest_frame < kNvwalEpochFrameCount);
-  assert(writer->epoch_frames[writer->oldest_frame].log_epoch);
-  assert(writer->active_frame < kNvwalEpochFrameCount);
-  assert(writer->epoch_frames[writer->active_frame].log_epoch);
+  const struct NvwalWriterContext* writer) {
+  assert(writer->oldest_frame_ < kNvwalEpochFrameCount);
+  assert(writer->epoch_frames_[writer->oldest_frame_].log_epoch_);
+  assert(writer->active_frame_ < kNvwalEpochFrameCount);
+  assert(writer->epoch_frames_[writer->active_frame_].log_epoch_);
 }
 
 uint32_t wrap_writer_epoch_frame(
@@ -168,12 +170,12 @@ uint32_t wrap_writer_epoch_frame(
 }
 
 uint64_t wrap_writer_offset(
-  const struct nvwal_writer_context* writer,
+  const struct NvwalWriterContext* writer,
   uint64_t offset) {
   uint64_t buffer_size;
 
   assert_writer_current_frames(writer);
-  buffer_size = writer->parent->config.writer_buffer_size;
+  buffer_size = writer->parent_->config_.writer_buffer_size_;
   assert(offset < buffer_size * 2U);
   if (offset < buffer_size) {
     return offset;
@@ -183,13 +185,13 @@ uint64_t wrap_writer_offset(
 }
 
 uint64_t calculate_writer_offset_distance(
-  const struct nvwal_writer_context* writer,
+  const struct NvwalWriterContext* writer,
   uint64_t left_offset,
   uint64_t right_offset) {
   uint64_t buffer_size;
 
   assert_writer_current_frames(writer);
-  buffer_size = writer->parent->config.writer_buffer_size;
+  buffer_size = writer->parent_->config_.writer_buffer_size_;
   if (left_offset < right_offset) {
     return right_offset - left_offset;
   } else {
@@ -201,42 +203,42 @@ uint64_t calculate_writer_offset_distance(
  * Make sure writer->active_frame corresponds to the given epoch.
  */
 void assure_writer_active_frame(
-  struct nvwal_writer_context* writer,
+  struct NvwalWriterContext* writer,
   nvwal_epoch_t log_epoch) {
-  struct nvwal_writer_epoch_frame* frame;
+  struct NvwalWriterEpochFrame* frame;
 
   assert_writer_current_frames(writer);
-  frame = writer->epoch_frames + writer->active_frame;
-  assert(nvwal_is_epoch_equal_or_after(log_epoch, frame->log_epoch));
-  if (frame->log_epoch == log_epoch) {
+  frame = writer->epoch_frames_ + writer->active_frame_;
+  assert(nvwal_is_epoch_equal_or_after(log_epoch, frame->log_epoch_));
+  if (frame->log_epoch_ == log_epoch) {
     /** The epoch exists. Most likely this case. */
   } else {
     /**
      * Otherwise it wasn't purely increasing.
      */
-    assert(frame->log_epoch == kNvwalInvalidEpoch);
+    assert(frame->log_epoch_ == kNvwalInvalidEpoch);
     /**
      * We newly populate this frame.
      * Release offsets before publisizing the frame (==store to epoch).
      */
-    writer->active_frame = wrap_writer_epoch_frame(writer->active_frame + 1U);
-    frame = writer->epoch_frames + writer->active_frame;
-    nvwal_atomic_store_release(&frame->head_offset, writer->last_tail_offset);
-    nvwal_atomic_store_release(&frame->tail_offset, writer->last_tail_offset);
-    nvwal_atomic_store_release(&frame->log_epoch, log_epoch);
+    writer->active_frame_ = wrap_writer_epoch_frame(writer->active_frame_ + 1U);
+    frame = writer->epoch_frames_ + writer->active_frame_;
+    nvwal_atomic_store_release(&frame->head_offset_, writer->last_tail_offset_);
+    nvwal_atomic_store_release(&frame->tail_offset_, writer->last_tail_offset_);
+    nvwal_atomic_store_release(&frame->log_epoch_, log_epoch);
   }
 }
 
 nvwal_error_t nvwal_on_wal_write(
-  struct nvwal_writer_context* writer,
+  struct NvwalWriterContext* writer,
   uint64_t bytes_written,
   nvwal_epoch_t log_epoch) {
-  struct nvwal_writer_epoch_frame* frame;
+  struct NvwalWriterEpochFrame* frame;
 
   assure_writer_active_frame(writer, log_epoch);
-  frame = writer->epoch_frames + writer->active_frame;
-  assert(frame->log_epoch == log_epoch);
-  assert(frame->tail_offset == writer->last_tail_offset);
+  frame = writer->epoch_frames_ + writer->active_frame_;
+  assert(frame->log_epoch_ == log_epoch);
+  assert(frame->tail_offset_ == writer->last_tail_offset_);
 
   /**
    * We should have enough space, right?
@@ -245,32 +247,32 @@ nvwal_error_t nvwal_on_wal_write(
   assert(
     calculate_writer_offset_distance(
       writer,
-      frame->tail_offset,
-      frame->head_offset)
+      frame->tail_offset_,
+      frame->head_offset_)
     + bytes_written
-      < writer->parent->config.writer_buffer_size);
+      < writer->parent_->config_.writer_buffer_size_);
 
-  writer->last_tail_offset = wrap_writer_offset(
+  writer->last_tail_offset_ = wrap_writer_offset(
     writer,
-    frame->tail_offset + bytes_written);
-  nvwal_atomic_store_release(&frame->tail_offset, writer->last_tail_offset);
+    frame->tail_offset_ + bytes_written);
+  nvwal_atomic_store_release(&frame->tail_offset_, writer->last_tail_offset_);
 
   return 0;
 }
 
 bool nvwal_has_enough_writer_space(
-  struct nvwal_writer_context* writer) {
+  struct NvwalWriterContext* writer) {
   uint32_t oldest_frame;
   uint64_t consumed_bytes;
-  struct nvwal_writer_epoch_frame* frame;
+  struct NvwalWriterEpochFrame* frame;
 
-  oldest_frame = nvwal_atomic_load_acquire(&writer->oldest_frame);
-  frame = writer->epoch_frames + oldest_frame;
+  oldest_frame = nvwal_atomic_load_acquire(&writer->oldest_frame_);
+  frame = writer->epoch_frames_ + oldest_frame;
   consumed_bytes = calculate_writer_offset_distance(
     writer,
-    frame->head_offset,
-    writer->last_tail_offset);
-  return (consumed_bytes * 2ULL <= writer->parent->config.writer_buffer_size);
+    frame->head_offset_,
+    writer->last_tail_offset_);
+  return (consumed_bytes * 2ULL <= writer->parent_->config_.writer_buffer_size_);
 }
 
 /**************************************************************************
@@ -278,26 +280,26 @@ bool nvwal_has_enough_writer_space(
  *  Flusher
  *
  ***************************************************************************/
-nvwal_error_t process_one_writer(struct nvwal_writer_context * writer);
+nvwal_error_t process_one_writer(struct NvwalWriterContext * writer);
 
 nvwal_error_t nvwal_flusher_main(
-  struct nvwal_context* wal) {
+  struct NvwalContext* wal) {
   uint32_t cur_writer_id;
   nvwal_error_t error_code;
 
   error_code = 0;
   /** whatever error checks here */
 
-  nvwal_atomic_store(&(wal->flusher_running), 1);
+  nvwal_atomic_store(&(wal->flusher_running_), 1);
   while (1) {
     /** doesn't have to be seq_cst, and this code runs very frequently */
-    if (nvwal_atomic_load_acquire(&(wal->flusher_stop_requested)) != 0) {
+    if (nvwal_atomic_load_acquire(&(wal->flusher_stop_requested_)) != 0) {
       break;
     }
 
     /* Look for work */
-    for (cur_writer_id = 0; cur_writer_id < wal->config.writer_count; ++cur_writer_id) {
-      error_code = process_one_writer(wal->writers + cur_writer_id);
+    for (cur_writer_id = 0; cur_writer_id < wal->config_.writer_count_; ++cur_writer_id) {
+      error_code = process_one_writer(wal->writers_ + cur_writer_id);
       if (error_code) {
         break;
       }
@@ -310,20 +312,20 @@ nvwal_error_t nvwal_flusher_main(
       //commit_metadata_updates(wal)
     }
   }
-  nvwal_atomic_store(&(wal->flusher_running), 0);
+  nvwal_atomic_store(&(wal->flusher_running_), 0);
 
   return error_code;
 }
 
 nvwal_error_t process_one_writer(
-  struct nvwal_writer_context * writer) {
+  struct NvwalWriterContext * writer) {
   return 0;
 }
 
 #ifdef BLUH /** long way to go to get the following code compile. so far disable all of them */
 nvwal_error_t process_one_writer(
-  struct nvwal_writer_context * writer) {
-  struct nvwal_context* wal;
+  struct NvwalWriterContext * writer) {
+  struct NvwalContext* wal;
   uint64_t buffer_size;
 
   wal = writer->parent;
@@ -360,9 +362,9 @@ nvwal_error_t process_one_writer(
 
     assert(wal->nv_offset <= kNvwalSegmentSize);
     if (wal->nv_offset == kNvwalSegmentSize) {
-      nvwal_log_segment * cur_segment = wal->segment[wal->cur_seg_idx];
+      NvwalLogSegment * cur_segment = wal->segment[wal->cur_seg_idx];
       int next_seg_idx = wal->cur_seg_idx + 1 % wal->num_segments;
-      nvwal_log_segment * next_segment = wal->segment[next_seg_idx];
+      NvwalLogSegment * next_segment = wal->segment[next_seg_idx];
 
       /* Transition current active segment to complete */
       assert(cur_segment->state == SEG_ACTIVE);
@@ -408,7 +410,7 @@ nvwal_error_t process_one_writer(
 
 
 void * fsync_thread_main(void * arg) {
-    struct nvwal_context * wal = arg;
+    struct NvwalContext * wal = arg;
 
     while(1) {
         int i;
@@ -423,10 +425,10 @@ void * fsync_thread_main(void * arg) {
 }
 
 void init_nvram_segment(
-  struct nvwal_context * wal,
+  struct NvwalContext * wal,
   int root_fd,
   int i) {
-  struct nvwal_log_segment * seg = &wal->segment[i];
+  struct NvwalLogSegment * seg = &wal->segment[i];
   int fd;
   char filename[256];
   void * baseaddr;
@@ -485,8 +487,8 @@ void init_nvram_segment(
 }
 
 void submit_write(
-  struct nvwal_context* wal,
-  struct nvwal_log_segment * seg) {
+  struct NvwalContext* wal,
+  struct NvwalLogSegment * seg) {
   int bytes_written;
 
   assert(seg->state == SEG_COMPLETE);
@@ -505,8 +507,8 @@ void submit_write(
 
 
 void sync_backing_file(
-  struct nvwal_context * wal,
-  struct nvwal_log_segment* seg) {
+  struct NvwalContext * wal,
+  struct NvwalLogSegment* seg) {
 
   assert(seg->state >= SEG_SUBMITTED);
 
@@ -535,8 +537,8 @@ void sync_backing_file(
 }
 
 void allocate_backing_file(
-  struct nvwal_context * wal,
-  struct nvwal_log_segment * seg) {
+  struct NvwalContext * wal,
+  struct NvwalLogSegment * seg) {
   uint64_t our_sequence = wal->log_sequence++;
   int our_fd = -1;
   int i = 0;

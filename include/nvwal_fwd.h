@@ -21,9 +21,9 @@
  * @file nvwal_fwd.h
  * Forward declarations.
  */
-struct nvwal_config;
-struct nvwal_context;
-struct nvwal_log_segment;
-struct nvwal_writer_context;
-struct nvwal_writer_epoch_frame;
+struct NvwalConfig;
+struct NvwalContext;
+struct NvwalLogSegment;
+struct NvwalWriterContext;
+struct NvwalWriterEpochFrame;
 #endif  /* NVWAL_FWD_H_ */

@@ -39,15 +39,15 @@ extern "C" {
  * @param[out] wal DESCRIBE ME
  */
 nvwal_error_t nvwal_init(
-  const struct nvwal_config* config,
-  struct nvwal_context* wal);
+  const struct NvwalConfig* config,
+  struct NvwalContext* wal);
 
 /**
  * DESCRIBE ME.
  * @param[in] wal DESCRIBE ME
  */
 nvwal_error_t nvwal_uninit(
-  struct nvwal_context* wal);
+  struct NvwalContext* wal);
 
 /**
  * @brief This must be invoked by the client application after nvwal_init()
@@ -66,13 +66,13 @@ nvwal_error_t nvwal_uninit(
  * @attention The calling thread will \b block until nvwal_uninit() is invoked,
  * or returns an error for whatever reason.
  *
- * @note (To be implemented) In nvwal_config, there will be
+ * @note (To be implemented) In NvwalConfig, there will be
  * an option for libnvwal itself to
  * launch a thread and invoke this method. In that case, the client application
  * must make sure that the program is linked against pthread.
  */
 nvwal_error_t nvwal_flusher_main(
-  struct nvwal_context* wal);
+  struct NvwalContext* wal);
 
 /**
  * @brief Notifies libnvwal of a region of written logs in the given writer's log buffer.
@@ -87,7 +87,7 @@ nvwal_error_t nvwal_flusher_main(
  *
  */
 nvwal_error_t nvwal_on_wal_write(
-  struct nvwal_writer_context* writer,
+  struct NvwalWriterContext* writer,
   uint64_t bytes_written,
   nvwal_epoch_t log_epoch);
 
@@ -98,13 +98,13 @@ nvwal_error_t nvwal_on_wal_write(
  * whether to sleep, spin, or do something in the meantime.
  */
 bool nvwal_has_enough_writer_space(
-  struct nvwal_writer_context* writer);
+  struct NvwalWriterContext* writer);
 
 /**
  * DESCRIBE ME.
  */
 nvwal_error_t nvwal_query_durable_epoch(
-  struct nvwal_context* wal,
+  struct NvwalContext* wal,
   nvwal_epoch_t* out);
 
 /**
