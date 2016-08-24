@@ -157,15 +157,10 @@
  * our metadata store. This piece is to be designed/implemented.
  * We will need it much much later.
  * @see nvwal_is_epoch_after()
+ * @see nvwal_increment_epoch()
+ * @see kNvwalInvalidEpoch
  */
 typedef uint64_t  nvwal_epoch_t;
-
-/**
- * This value of epoch is reserved for null/invalid/etc.
- * Thus, when we increment an epoch, we must be careful.
- * @see nvwal_increment_epoch()
- */
-const nvwal_epoch_t kNvwalInvalidEpoch = 0;
 
 /** DESCRIBE ME */
 typedef int32_t   nvwal_error_t;
@@ -173,6 +168,13 @@ typedef int32_t   nvwal_error_t;
 typedef int8_t    nvwal_byte_t;
 
 enum NvwalConstants {
+  /**
+  * This value of epoch is reserved for null/invalid/etc.
+  * Thus, when we increment an epoch, we must be careful.
+  * @see nvwal_increment_epoch()
+  */
+  kNvwalInvalidEpoch = 0,
+
   /**
    * Throughout this library, every file path must be represented within this length,
    * including null termination and serial path suffix.
