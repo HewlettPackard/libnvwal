@@ -15,6 +15,8 @@
  * HP designates this particular file as subject to the "Classpath" exception
  * as provided by HP in the LICENSE.txt file that accompanied this code.
  */
+#include "nvwal_api.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -22,39 +24,68 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "nvwal_api.h"
 #include "nvwal_atomics.h"
 #include "nvwal_util.h"
-
-void init_nvram_segment(
-  struct NvwalContext * wal,
-  int root_fd,
-  int i);
 
 /**************************************************************************
  *
  *  Initializations
  *
  ***************************************************************************/
+
+/** subroutine of nvwal_init() used to create fresh new segment, not during restart */
+nvwal_error_t init_fresh_nvram_segment(
+  struct NvwalContext * wal,
+  struct NvwalLogSegment* segment,
+  nvwal_dsid_t dsid);
+/** subroutine of nvwal_uninit() or failed nvwal_init() */
+void uninit_nvram_segment(
+  struct NvwalContext * wal,
+  struct NvwalLogSegment* segment,
+  nvwal_dsid_t dsid);
+
+void remove_trailing_slash(char* path, uint16_t* len) {
+  while ((*len) > 0 && path[(*len) - 1] == '/') {
+    path[(*len) - 1] = '\0';
+    --(*len);
+  }
+}
+
 nvwal_error_t nvwal_init(
   const struct NvwalConfig* config,
   struct NvwalContext* wal) {
-  int nv_root_fd;
-  int block_root_fd;
   uint32_t i;
   struct NvwalWriterContext* writer;
+  nvwal_dsid_t resuming_dsid;
 
   memset(wal, 0, sizeof(*wal));
   memcpy(&wal->config_, config, sizeof(*config));
 
-  if (strnlen(config->nv_root_, kNvwalMaxPathLength) >= kNvwalMaxPathLength) {
+  /** Check/adjust nv_root/disk_root */
+  wal->config_.nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
+  wal->config_.disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
+  if (wal->config_.nv_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: nv_root must be null terminated\n");
-  } else if (strnlen(config->block_root_, kNvwalMaxPathLength) >= kNvwalMaxPathLength) {
-    return nvwal_raise_einval("Error: block_root must be null terminated\n");
-  } else if (config->writer_count_ == 0 || config->writer_count_ > kNvwalMaxWorkers) {
+  } else if (wal->config_.nv_root_len_ >= kNvwalMaxFolderPathLength) {
+    return nvwal_raise_einval_llu(
+      "Error: nv_root must be at most %llu characters\n",
+      kNvwalMaxFolderPathLength);
+  } else if (wal->config_.disk_root_len_ >= kNvwalMaxPathLength) {
+    return nvwal_raise_einval("Error: disk_root_ must be null terminated\n");
+  } else if (wal->config_.disk_root_len_ >= kNvwalMaxFolderPathLength) {
+    return nvwal_raise_einval_llu(
+      "Error: disk_root must be at most %llu characters\n",
+      kNvwalMaxFolderPathLength);
+  }
+  remove_trailing_slash(wal->config_.nv_root_, &wal->config_.nv_root_len_);
+  remove_trailing_slash(wal->config_.disk_root_, &wal->config_.disk_root_len_);
+
+  /** Check writer_count, writer_buffer_size, writer_buffers */
+  if (config->writer_count_ == 0 || config->writer_count_ > kNvwalMaxWorkers) {
     return nvwal_raise_einval_llu(
       "Error: writer_count must be 1 to %llu\n",
       kNvwalMaxWorkers);
@@ -71,16 +102,16 @@ nvwal_error_t nvwal_init(
     }
   }
 
-  wal->num_active_segments_ = config->nv_quota_ / kNvwalSegmentSize;
+  wal->segment_count_ = config->nv_quota_ / kNvwalSegmentSize;
   if (config->nv_quota_ % kNvwalSegmentSize) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be a multiple of %llu\n",
       kNvwalSegmentSize);
-  } else if (wal->num_active_segments_ < 2U) {
+  } else if (wal->segment_count_ < 2U) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be at least %llu\n",
       2ULL * kNvwalSegmentSize);
-  } else if (wal->num_active_segments_ > kNvwalMaxActiveSegments) {
+  } else if (wal->segment_count_ > kNvwalMaxActiveSegments) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be at most %llu\n",
       (uint64_t) kNvwalMaxActiveSegments * kNvwalSegmentSize);
@@ -89,6 +120,7 @@ nvwal_error_t nvwal_init(
   wal->durable_ = config->resuming_epoch_;
   wal->latest_ = config->resuming_epoch_;
 
+  /** TODO we should retrieve from MDS in restart case */
   for (i = 0; i < config->writer_count_; ++i) {
     writer = wal->writers_ + i;
     writer->parent_ = wal;
@@ -102,25 +134,113 @@ nvwal_error_t nvwal_init(
     writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
   }
 
-  nv_root_fd = open(config->nv_root_, 0);
-
   /* Initialize all nv segments */
-
-  for (i = 0; i < wal->num_active_segments_; ++i) {
-    init_nvram_segment(wal, nv_root_fd, i);
+  resuming_dsid = 0 + 1;  /** TODO we should retrieve from MDS in restart case */
+  for (i = 0; i < wal->segment_count_; ++i) {
+    memset(wal->segments_, 0, sizeof(struct NvwalLogSegment));
+    init_fresh_nvram_segment(wal, wal->segments_ + i, resuming_dsid + i);
   }
 
-  /* Created the files, fsync parent directory */
-  fsync(nv_root_fd);
-
-  close(nv_root_fd);
-
-  block_root_fd = open(config->block_root_, 0);
-
-  wal->log_root_fd_ = block_root_fd;
+  /* Created files on NVDIMM/Disk, fsync parent directory */
+  nvwal_open_and_fsync(wal->config_.nv_root_);
+  nvwal_open_and_fsync(wal->config_.disk_root_);
 
   return 0;
 }
+
+nvwal_error_t init_fresh_nvram_segment(
+  struct NvwalContext * wal,
+  struct NvwalLogSegment* segment,
+  nvwal_dsid_t dsid) {
+  nvwal_error_t ret;
+  int nv_fd, disk_fd;
+  char nv_path[kNvwalMaxPathLength];
+  void* nv_baseaddr;
+
+  assert(dsid != kNvwalInvalidDsid);
+  assert(wal->config_.nv_root_len_ + 32U < kNvwalMaxPathLength);
+  ret = 0;
+  nv_fd = 0;
+  nv_baseaddr = 0;
+
+  nvwal_concat_sequence_filename(
+    wal->config_.nv_root_,
+    "nv_segment_",
+    dsid,
+    nv_path);
+
+  nv_fd = nvwal_open_best_effort_o_direct(
+    nv_path,
+    O_CREAT | O_RDWR,
+    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+
+  if (nv_fd == -1) {
+    /** Failed to open/create the file! */
+    ret = errno;
+    goto error_return;
+  }
+
+  assert(nv_fd);  /** open never returns 0 */
+
+  /** posix_fallocate doesn't set errno, do it ourselves */
+  ret = posix_fallocate(nv_fd, 0, kNvwalSegmentSize);
+  if (ret) {
+    goto error_return;
+  }
+
+  ftruncate(nv_fd, kNvwalSegmentSize);
+  if (errno) {
+    /** Failed to set the file length! */
+    ret = errno;
+    goto error_return;
+  }
+
+  fsync(nv_fd);
+  if (errno) {
+    /** Failed to fsync! */
+    ret = errno;
+    goto error_return;
+  }
+
+  /**
+   * Don't bother (non-transparent) huge pages. Even libpmem doesn't try it.
+   */
+  nv_baseaddr = mmap(0,
+                  kNvwalSegmentSize,
+                  PROT_READ | PROT_WRITE,
+                  MAP_ANONYMOUS | MAP_PRIVATE,
+                  nv_fd,
+                  0);
+
+  if (nv_baseaddr == MAP_FAILED) {
+    ret = errno;
+    goto error_return;
+  }
+  assert(nv_baseaddr);
+
+  /*
+   * Even with fallocate we don't trust the metadata to be stable
+   * enough for userspace durability. Actually write some bytes!
+   */
+  memset(nv_baseaddr, 0, kNvwalSegmentSize);
+  msync(nv_baseaddr, kNvwalSegmentSize, MS_SYNC);
+
+  segment->dsid_ = dsid;
+  segment->nv_fd_ = nv_fd;
+  segment->nv_baseaddr_ = nv_baseaddr;
+  return 0;
+
+error_return:
+  if (nv_baseaddr && nv_baseaddr != MAP_FAILED) {
+    munmap(nv_baseaddr, kNvwalSegmentSize);
+  }
+  if (nv_fd && nv_fd != -1) {
+    close(nv_fd);
+  }
+  errno = ret;
+  return ret;
+}
+
 
 /**************************************************************************
  *
@@ -222,6 +342,12 @@ void assure_writer_active_frame(
      * Release offsets before publisizing the frame (==store to epoch).
      */
     writer->active_frame_ = wrap_writer_epoch_frame(writer->active_frame_ + 1U);
+    /**
+     * Now active_frame is surely ahead of oldest_frame.
+     * If the assert below fires, this writer was issueing too new epochs,
+     * violating the "upto + 2" contract.
+     */
+    assert(writer->active_frame_ != writer->oldest_frame_);
     frame = writer->epoch_frames_ + writer->active_frame_;
     nvwal_atomic_store_release(&frame->head_offset_, writer->last_tail_offset_);
     nvwal_atomic_store_release(&frame->tail_offset_, writer->last_tail_offset_);
@@ -260,7 +386,7 @@ nvwal_error_t nvwal_on_wal_write(
   return 0;
 }
 
-bool nvwal_has_enough_writer_space(
+uint8_t nvwal_has_enough_writer_space(
   struct NvwalWriterContext* writer) {
   uint32_t oldest_frame;
   uint64_t consumed_bytes;
@@ -316,6 +442,11 @@ nvwal_error_t nvwal_flusher_main(
 
   return error_code;
 }
+
+nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
+  return 0;
+}
+
 
 nvwal_error_t process_one_writer(
   struct NvwalWriterContext * writer) {

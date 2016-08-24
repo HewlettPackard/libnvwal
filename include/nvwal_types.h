@@ -25,7 +25,6 @@
  * @{
  */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "nvwal_fwd.h"
@@ -167,6 +166,24 @@ typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
 typedef int8_t    nvwal_byte_t;
 
+/**
+ * @brief Unique identifier for a \b Durable (or disk-resident) \b Segment.
+ * @details
+ * DSID identifies a log segment on disk, uniquely within the given WAL instance.
+ * DSID is not unique across different WAL instances, but they are completely separate.
+ *
+ * A valid DSID starts with 1 (0 means null) and grows by one whenever
+ * we create a new segment file on disk.
+ * Each log segment is initially just NVDIMM-resident, then copied to a
+ * on-disk file named "nvwal_segment_xxxxxxxx" where xxxx is a hex string of
+ * DSID (always 8 characters).
+ *
+ * We so far assume there are at most 2^32 segments in total.
+ * With 32MB/segment, this is 2^57 bytes of logs... should be enough.
+ * @see kNvwalInvalidDsid
+ */
+typedef uint32_t  nvwal_dsid_t;
+
 enum NvwalConstants {
   /**
   * This value of epoch is reserved for null/invalid/etc.
@@ -176,12 +193,25 @@ enum NvwalConstants {
   kNvwalInvalidEpoch = 0,
 
   /**
+   * Represents null for nvwal_dsid_t.
+   * @see nvwal_dsid_t
+   */
+  kNvwalInvalidDsid = 0,
+
+  /**
    * Throughout this library, every file path must be represented within this length,
    * including null termination and serial path suffix.
    * In several places, we assume this to avoid dynamically-allocated strings and
    * simplify copying/allocation/deallocation.
    */
   kNvwalMaxPathLength = 256U,
+
+  /**
+   * nv_root_/disk_root_ must be within this length so that we can
+   * append our own filenames under the folder.
+   * eg nvwal_segment_xxxxxxxx.
+   */
+  kNvwalMaxFolderPathLength = kNvwalMaxPathLength - 32,
 
   /**
    * Likewise, we statically assume each WAL instance has at most this number of
@@ -216,24 +246,6 @@ enum NvwalConstants {
   kNvwalEpochFrameCount = 5,
 };
 
-
-/** DESCRIBE ME */
-enum nvwal_seg_state_t {
-  SEG_UNUSED = 0,
-  SEG_ACTIVE,
-  SEG_COMPLETE,
-  SEG_SUBMITTED,
-  SEG_SYNCING,
-  SEG_SYNCED
-};
-
-/** Ignored. */
-enum NvwalConfig_flags {
-    BG_FSYNC_THREAD = 1 << 0,
-    MMAP_DISK_FILE  = 1 << 1,
-    CIRCULAR_LOG    = 1 << 2
-};
-
 /**
  * DESCRIBE ME.
  * @note This object is a POD. It can be simply initialized by memzero,
@@ -252,7 +264,19 @@ struct NvwalConfig {
    * this WAL instance will copy log files from NVDIMM storage.
    * If this string is not null-terminated, nvwal_init() will return an error.
    */
-  char block_root_[kNvwalMaxPathLength];
+  char disk_root_[kNvwalMaxPathLength];
+
+  /**
+   * strnlen(nv_root). Just an auxiliary variable. Automatically
+   * set during initialization.
+   */
+  uint16_t nv_root_len_;
+
+  /**
+   * strnlen(disk_root). Just an auxiliary variable. Automatically
+   * set during initialization.
+   */
+  uint16_t disk_root_len_;
 
   /**
    * When this is a second run or later, give the definitely-durable epoch
@@ -398,24 +422,60 @@ struct NvwalWriterContext {
 };
 
 /**
- * DESCRIBE ME
+ * @brief A log segment libnvwal is writing to, copying from, or reading from.
+ * @details
+ *
  * @note This object is a POD. It can be simply initialized by memzero,
- * copied by memcpy, and no need to free any thing \b except \b file \b descriptors.
+ * copied by memcpy, and no need to free any thing \b except \b file \b descriptors and \b mmap.
  */
 struct NvwalLogSegment {
+  /**
+   * mmap-ed virtual address for this segment on NVDIMM.
+   * It is never MAP_FAILED. We treat that case as soon as we invoke mmap.
+   * When it is non-null, libnvwal is responsible to unmap it durinng uninit.
+   */
   nvwal_byte_t* nv_baseaddr_;
 
-  /** On-disk sequence number, identifies filename */
-  uint64_t seq_;
-  int32_t nvram_fd_;
-  int32_t disk_fd_;
-  uint64_t disk_offset_;
+  /**
+   * When this segment is populated and then copied to disk,
+   * this will be the ID of the disk-resident segment.
+   * This is bumped up without race when the segment object is recycled for next use.
+   */
+  nvwal_dsid_t dsid_;
 
-  /** May be used for communication between flusher thread and fsync thread */
-  enum nvwal_seg_state_t state_;
+  /**
+   * When this segment is populated and ready for copying to disk,
+   * the flusher sets this variable to notify fsyncher.
+   * fsyncher does nothing while this variable is 0.
+   * Resets to 0 without race when the segment object is recycled for next use.
+   */
+  uint8_t fsync_requested_;
 
-  /** true if direntry of disk_fd is durable */
-  bool dir_synced_;
+  /**
+   * When this segment is durably copied to disk,
+   * the fsyncer sets this variable to notify flusher.
+   * Resets to 0 without race when the segment object is recycled for next use.
+   */
+  uint8_t fsync_completed_;
+
+  /**
+   * If fsyncer had any error while copying this segment to disk, the error code.
+   */
+  nvwal_error_t fsync_error_;
+
+  /**
+   * File descriptor on NVDIMM.
+   * It is never -1 (open has failed). We treat that case as soon as we invoke open.
+   * When it is non-zero, libnvwal is responsible to close it durinng uninit.
+   */
+  int64_t nv_fd_;
+  /**
+   * File descriptor on disk.
+   * It is never -1 (open has failed). We treat that case as soon as we invoke open.
+   * Set/read only by fsyncher.
+   * When it is non-zero, fsyncher is responsible to close it durinng uninit.
+   */
+  int64_t disk_fd_;
 };
 
 /**
@@ -446,28 +506,17 @@ struct NvwalContext {
   struct NvwalConfig config_;
 
   /**
-   * DESCRIBE ME
+   * Maintains state of each log segment in this WAL instance.
+   * Only up to log_segments_[segment_count_ - 1] are used.
    */
-  uint32_t num_active_segments_;
+  struct NvwalLogSegment segments_[kNvwalMaxActiveSegments];
 
   /**
-   * DESCRIBE ME
+   * Number of segments this WAL instance uses.
+   * Immutable once constructed. Do not modify it yourself!
+   * @invariant segment_count_ <= kNvwalMaxActiveSegments
    */
-  struct NvwalLogSegment active_segments_[kNvwalMaxActiveSegments];
-
-  int32_t log_root_fd_;
-
-  /** 0 if append-only log */
-  uint64_t max_log_size_;
-
-  /** Next on-disk sequence number, see log_segment.seq  */
-  uint64_t log_sequence_;
-
-  /** mmapped address of current nv segment*/
-  nvwal_byte_t* cur_region_;
-
-  /** Index into nv_region */
-  uint64_t nv_offset_;
+  uint32_t segment_count_;
 
   /** Index into segment[] */
   uint32_t cur_seg_idx_;
