@@ -16,12 +16,11 @@
  * as provided by HP in the LICENSE.txt file that accompanied this code.
  */
 
-#ifndef NVWAL_MDS_H_
-#define NVWAL_MDS_H_
+#ifndef NVWAL_MDS_TYPES_H_
+#define NVWAL_MDS_TYPES_H_
 /**
  * @file mds.h
- * Function interface to a minimal metadata store for internal use by the 
- * core nvwal library. 
+ * Provides typedefs/enums/structs used in mds (meta-data store).
  * @ingroup LIBNVWAL_INTERNAL
  * @addtogroup LIBNVWAL_INTERNAL
  * @{
@@ -29,26 +28,28 @@
 
 #include "nvwal_fwd.h"
 #include "nvwal_types.h"
-#include "nvwal_mds_types.h"
 
 
 /**
- * @brief Initializes the metadata store.
- *
- * @param[in] config runtime configuration parameters
- * @param[out] wal nvwal context 
+ * @brief Represents metadata associated with an epoch stored in the metadata store. 
+ * 
+ * @note This POD must equal to the NV-DIMM failure-atomic unit size, which
+ * is a single cache line.
  */
-nvwal_error_t mds_init(
-  const struct NvwalConfig* config, 
-  struct NvwalContext* wal);
+struct MdsEpochMetadata {
+  union {
+    struct {
+      nvwal_epoch_t eid_;           /**< epoch identifier */
+      uint64_t      from_seg_id_;
+      uint32_t      from_offset_; 
+      uint64_t      to_seg_id_;
+      uint32_t      to_off_;
+    };
+    uint64_t        u64_[8];
+  };
+};
 
-
-/**
- * @brief Uninitializes the metadata store.
- *
- * @param[in] wal nvwal context 
- */
-nvwal_error_t mds_uninit(struct NvwalContext* wal);
+_Static_assert(sizeof(struct MdsEpochMetadata) == 64, "Epoch metadata must match NV-DIMM failure-atomic unit size");
 
 
 /** @} */
