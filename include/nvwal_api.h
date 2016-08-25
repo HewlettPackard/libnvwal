@@ -43,8 +43,15 @@ nvwal_error_t nvwal_init(
   struct NvwalContext* wal);
 
 /**
- * DESCRIBE ME.
- * @param[in] wal DESCRIBE ME
+ * @brief Releases all resources this WAL instance had.
+ * @param[in,out] wal WAL context to release
+ * @return Returns any non-zero error code we observed while releaseing.
+ * @details
+ * This method tries to release as much resource as possible even in
+ * catastrophic circumstance. It thus continues even after observing
+ * some error. The return value is thus the last error we observed.
+ * In case there are many issues happening, it might not be the
+ * root cause.
  */
 nvwal_error_t nvwal_uninit(
   struct NvwalContext* wal);

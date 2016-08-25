@@ -575,9 +575,18 @@ struct NvwalContext {
   uint8_t flusher_running_;
 
   /**
+   * Used to inform the fsyncer that nvwal_uninit() was invoked.
+   */
+  uint8_t fsyncer_stop_requested_;
+  /**
+   * Set when the fsyncer thread started running.
+   */
+  uint8_t fsyncer_running_;
+
+  /**
    * Metadata store context 
    */
-  
+  struct NvwalMdsContext mds_;
 };
 
 /** @} */

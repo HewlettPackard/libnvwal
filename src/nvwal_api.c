@@ -29,6 +29,7 @@
 #include <sys/types.h>
 
 #include "nvwal_atomics.h"
+#include "nvwal_mds.h"
 #include "nvwal_util.h"
 
 /**************************************************************************
@@ -43,10 +44,7 @@ nvwal_error_t init_fresh_nvram_segment(
   struct NvwalLogSegment* segment,
   nvwal_dsid_t dsid);
 /** subroutine of nvwal_uninit() or failed nvwal_init() */
-void uninit_nvram_segment(
-  struct NvwalContext * wal,
-  struct NvwalLogSegment* segment,
-  nvwal_dsid_t dsid);
+nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment);
 
 void remove_trailing_slash(char* path, uint16_t* len) {
   while ((*len) > 0 && path[(*len) - 1] == '/') {
@@ -59,6 +57,7 @@ nvwal_error_t nvwal_init(
   const struct NvwalConfig* config,
   struct NvwalContext* wal) {
   uint32_t i;
+  nvwal_error_t ret;
   struct NvwalWriterContext* writer;
   nvwal_dsid_t resuming_dsid;
 
@@ -134,18 +133,45 @@ nvwal_error_t nvwal_init(
     writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
   }
 
+  /**
+   * From now on, error-return might have to release a few things.
+   * Invoke nvwal_uninit on error-return.
+   */
+  ret = 0;
+
+  /* Initialize Metadata Store */
+  /* ret = mds_init(&wal->config_, wal); */
+  if (ret) {
+    goto error_return;
+  }
+
   /* Initialize all nv segments */
   resuming_dsid = 0 + 1;  /** TODO we should retrieve from MDS in restart case */
   for (i = 0; i < wal->segment_count_; ++i) {
     memset(wal->segments_, 0, sizeof(struct NvwalLogSegment));
-    init_fresh_nvram_segment(wal, wal->segments_ + i, resuming_dsid + i);
+    ret = init_fresh_nvram_segment(wal, wal->segments_ + i, resuming_dsid + i);
+    if (ret) {
+      goto error_return;
+    }
   }
 
   /* Created files on NVDIMM/Disk, fsync parent directory */
-  nvwal_open_and_fsync(wal->config_.nv_root_);
-  nvwal_open_and_fsync(wal->config_.disk_root_);
-
+  ret = nvwal_open_and_fsync(wal->config_.nv_root_);
+  if (ret) {
+    goto error_return;
+  }
+  ret = nvwal_open_and_fsync(wal->config_.disk_root_);
+  if (ret) {
+    goto error_return;
+  }
   return 0;
+
+error_return:
+  assert(ret);
+  nvwal_uninit(wal);
+  /** Error code of uninit is ignored. Our own ret is probably more informative */
+  errno = ret;
+  return ret;
 }
 
 nvwal_error_t init_fresh_nvram_segment(
@@ -231,12 +257,7 @@ nvwal_error_t init_fresh_nvram_segment(
   return 0;
 
 error_return:
-  if (nv_baseaddr && nv_baseaddr != MAP_FAILED) {
-    munmap(nv_baseaddr, kNvwalSegmentSize);
-  }
-  if (nv_fd && nv_fd != -1) {
-    close(nv_fd);
-  }
+  uninit_log_segment(segment);
   errno = ret;
   return ret;
 }
@@ -250,20 +271,68 @@ error_return:
 
 nvwal_error_t nvwal_uninit(
   struct NvwalContext* wal) {
+  nvwal_error_t ret;  /* last-seen error code */
+  int i;
 
+  ret = 0;
+
+  /** Stop flusher */
   if (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
     nvwal_atomic_store(&(wal->flusher_stop_requested_), 1U);
     while (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
       /** TODO Should have a sleep or at least yield */
       /* NOTE: Do we need to kick the flusher one more time or should we assume
-       * assume the application's writer threads are responsible enough to 
+       * assume the application's writer threads are responsible enough to
        * call nvwal_on_wal_write one last time before the uninit happens?
        */
     }
   }
 
+  /** Stop fsyncer */
+  if (nvwal_atomic_load(&(wal->fsyncer_running_)) != 0) {
+    nvwal_atomic_store(&(wal->fsyncer_stop_requested_), 1U);
+    while (nvwal_atomic_load(&(wal->fsyncer_running_)) != 0) {
+    }
+  }
+
+  for (i = 0; i < wal->segment_count_; ++i) {
+    ret = nvwal_stock_error_code(ret, uninit_log_segment(wal->segments_ + i));
+  }
+
   return 0;
 }
+
+nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
+  nvwal_error_t ret;  /* last-seen error code */
+
+  ret = 0;
+
+  if (segment->nv_baseaddr_ && segment->nv_baseaddr_ != MAP_FAILED) {
+    if (munmap(segment->nv_baseaddr_, kNvwalSegmentSize) == -1) {
+      ret = nvwal_stock_error_code(ret, errno);
+    }
+  }
+  segment->nv_baseaddr_ = 0;
+
+  if (segment->nv_fd_ && segment->nv_fd_ != -1) {
+    if (close(segment->nv_fd_) == -1) {
+      ret = nvwal_stock_error_code(ret, errno);
+    }
+  }
+  segment->nv_fd_ = 0;
+
+  if (segment->disk_fd_ && segment->disk_fd_ != -1) {
+    if (close(segment->disk_fd_) == -1) {
+      ret = nvwal_stock_error_code(ret, errno);
+    }
+  }
+  segment->disk_fd_ = 0;
+
+  memset(segment, 0, sizeof(struct NvwalLogSegment));
+
+  return ret;
+}
+
 
 /**************************************************************************
  *

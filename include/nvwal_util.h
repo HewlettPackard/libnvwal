@@ -82,6 +82,16 @@ int nvwal_open_best_effort_o_direct(
  */
 nvwal_error_t nvwal_open_and_fsync(const char* path);
 
+/**
+ * Used to retain the last-observed error.
+ */
+inline nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code) {
+  if (new_code) {
+    return new_code;
+  } else {
+    return cur_code;
+  }
+}
 
 /** @} */
 
