@@ -167,6 +167,13 @@ typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
 typedef int8_t    nvwal_byte_t;
 
+/*
+ * Include the metadata store (mds) type definitions after we define the 
+ * primitive types but before we define any other structs that depend on 
+ * the mds types.
+ */
+#include "nvwal_mds_types.h"
+
 enum NvwalConstants {
   /**
   * This value of epoch is reserved for null/invalid/etc.
@@ -214,6 +221,21 @@ enum NvwalConstants {
    * safe to reset [oldest + 4]. This is why we have 5 frames.
    */
   kNvwalEpochFrameCount = 5,
+
+  /**
+   * @brief Default page size in bytes for meta-data store.
+   * 
+   */
+  kNvwalMdsPageSize = 1ULL << 20,
+
+
+  /**
+   * @brief Largest number of pages files being actively written.
+   * 
+   * @note Currently, we support a single page file so we don't 
+   * expect to have more than one active page file.
+   */
+  kNvwalMdsMaxActivePagefiles = 1U;
 };
 
 
@@ -295,6 +317,9 @@ struct NvwalConfig {
    * is null, nvwal_init() will return an error.
    */
   nvwal_byte_t* writer_buffers_[kNvwalMaxWorkers];
+
+  /** Size of metadata store buffer page */
+  uint64_t mds_page_size_;
 };
 
 /**
@@ -482,6 +507,11 @@ struct NvwalContext {
    * Set when the flusher thread started running.
    */
   uint8_t flusher_running_;
+
+  /**
+   * Metadata store context 
+   */
+  
 };
 
 /** @} */
