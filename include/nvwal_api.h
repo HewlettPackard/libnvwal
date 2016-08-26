@@ -138,6 +138,31 @@ inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
   }
 }
 
+/**
+ * @brief Initializes the reader context.
+ */
+nvwal_error_t nvwal_reader_init(
+  struct NvwalReaderContext* reader); 
+
+/**
+ * @brief Uninitializes the reader context.
+ */
+nvwal_error_t nvwal_reader_uninit(
+  struct NvwalReaderContext* reader); 
+
+/**
+ * @brief Fetches the requested epoch for the application
+ * @param[in] epoch The requested epoch
+ * @param[out] buf Pointer to epoch data
+ * @param[out] len Length of buf
+ *
+ */
+nvwal_error_t get_epoch(
+  NvwalReaderContext* reader,
+  nvwal_epoch_t const epoch, 
+  char ** buf, 
+  size_t * len);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

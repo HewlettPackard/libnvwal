@@ -28,6 +28,7 @@
 #include "nvwal_api.h"
 #include "nvwal_atomics.h"
 #include "nvwal_util.h"
+#include "nvwal_mds.h"
 
 void init_nvram_segment(
   struct NvwalContext * wal,
@@ -585,3 +586,127 @@ void allocate_backing_file(
 }
 
 #endif  /* BLUH */
+
+/**************************************************************************
+ *
+ *  Reader
+ *
+ ***************************************************************************/
+#if 0
+nvwal_error_t nvwal_reader_init(
+  struct NvwalReaderContext* reader) {
+
+  memset(reader, 0, sizeof(*reader));
+
+  reader->prev_epoch_ = 0;
+  reader->tail_epoch_ = 0;
+  reader->fetch_complete_ = true;
+  reader->seg_id_ = 0;
+}
+
+nvwal_error_t nvwal_reader_uninit(
+  struct NvwalReaderContext* reader) {
+
+  memset(reader, 0, sizeof(*reader));
+
+}
+
+nvwal_error_t get_epoch(
+  NvwalReaderContext* reader,
+  nvwal_epoch_t epoch,
+  char ** buf,
+  size_t * len) {
+
+  char* mmap_addr = 0;
+  bool first_mmap = true;
+  *len = 0;
+
+  /* Lookup the epoch info from the MDS */
+  struct EpochMetadata epoch_meta;
+
+  /* Is this a retry call because we didn't finish mmapping everything 
+   * for the requested epoch? */
+  if (reader->fetch_complete_)
+  {
+    /* Initialize our segment progress for this epoch */
+    reader->seg_id_ = epoch_meta.from_seg_id;
+  }
+  /* else we already have the last segment we tried to mmap */
+
+  do 
+  {
+
+    size_t offset = 0;
+    if (reader->seg_id_ == epoch_meta.from_seg_id)
+    {
+      /* This is the first segment */
+      if (epoch_meta.from_seg_id_ == epoch_meta.to_seg_id_)
+      {
+        /* This is also the only segment. */
+        map_len = epoch_meta.to_off_ - epoch_meta.from_off_;
+      } else
+      {
+        /* There are more segments to follow. Mmap to the end of the segment. */
+        map_len = kNvwalSegmentSize - reader->offset_;
+      }
+
+      offset = epoch_meta.from_off_;
+    } else if (reader->seg_id_ < epoch_meta.to_seg_id)
+    {
+      /* This is a middle segment; we're going to map the entire segment. */
+      map_len = kNvwalSegmentSize;
+      offset = 0;
+    } else
+    {
+      /* This is the final segment */
+      map_len = epoch_meta.to_off_;
+      offset = 0;
+    }
+
+    /* Lookup or infer the filename for this segment */
+    fd = open();
+    if (-1 == fd)
+    {
+
+    }
+
+    if (first_mmap)
+    {
+      /* This is the first mmap attempt for this get_epoch call.
+       * Let the kernel pick where to start and save the beginning of the mmap. */
+      *buf = mmap(mmap_addr, map_len, PROT_READ, MAP_SHARED, fd, offset);
+      first_mmap = false;
+      if (MAP_FAILED == *buf)
+      {
+        /* Pretty bad to fail on the first attempt while letting the kernel pick */
+        reader->fetch_complete_ = false;
+        return /*something*/;
+      }
+    } else
+    {
+      char* fixed_map = mmap(mmap_addr, map_len, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0);
+      if (MAP_FAILED == fixed_map)
+      {
+        reader->fetch_complete_ = false;
+        return /* retry */;
+      }
+    }
+    *len += map_len;
+
+    mmap_addr += map_len;
+
+    reader->seg_id_++;
+    reader->offset_ += len;
+    if (kNvwalSegmentSize == reader->offset)
+    {
+      reader->offset = 0;
+    }
+  
+  } while (reader->seg_id_ <= epoch_meta.to_seg_id_)
+
+  reader->fetch_complete = true;
+  reader->prev_epoch_ = epoch;
+
+  return /* no error */;
+}
+#endif

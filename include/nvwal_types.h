@@ -214,6 +214,11 @@ enum NvwalConstants {
    * safe to reset [oldest + 4]. This is why we have 5 frames.
    */
   kNvwalEpochFrameCount = 5,
+
+  /**
+   * Number of epochs to prefetch when calling get_next_epoch()
+   */
+  kNvwalPrefetchLength = 5;
 };
 
 
@@ -416,6 +421,18 @@ struct NvwalLogSegment {
 
   /** true if direntry of disk_fd is durable */
   bool dir_synced_;
+};
+
+/**
+ * @brief Represents the context of the reading API for retrieving prior
+ * epoch data. Must be initialized/uninitialized via nvwal_reader_init()
+ * and nvwal_reader_uninit().
+ */
+struct NvwalReaderContext {
+  nvwal_epoch_t prev_epoch_; /* The epoch most recently requested and fetched */
+  nvwal_epoch_t tail_epoch_; /* The largest epoch number we've prefetched */
+  bool fetch_complete_;
+  uint64_t seg_id_; /* The last segment we tried to mmap */
 };
 
 /**
