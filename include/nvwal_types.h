@@ -501,7 +501,7 @@ struct NvwalLogSegment {
  * @brief Represents a context of a meta-data-store buffer-manager instance.
  */
 struct NvwalMdsBufferManagerContext {
-  int root_fd_;
+  struct Buffer* buffer_;
 };
 
 /**
@@ -511,13 +511,10 @@ struct NvwalMdsContext {
   /** Runtime configuration parameters */
   struct NvwalConfig config_;
 
-  /** File descriptor to the disk directory where we keep metadata page files */
-  int block_root_fd_;          
-
-  struct PageFile* active_pagefiles_[kNvwalMdsMaxActivePagefiles];
+  struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
 
   /** Buffer manager context */
-  struct NvwalMdsBufferManagerContext bfmgr_;   
+  struct NvwalMdsBufferManagerContext bufmgr_;   
 };
 
 /**

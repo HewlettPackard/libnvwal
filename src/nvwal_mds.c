@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -27,15 +28,16 @@
 
 #include <libpmem.h>
 
-#include "nvwal_types.h"
 #include "nvwal_mds.h"
+#include "nvwal_types.h"
+#include "nvwal_util.h"
+
 
 #define ASSERT_FD_VALID(fd) assert(fd != -1)
 
 #define MDS_NVRAM_BUFFER_FILE_PREFIX  "mds-nvram-buffer-"
 #define MDS_PAGE_FILE_PREFIX          "mds-pagefile-"
 
-#define FILENAME_MAX_LEN              256
 /*
  * QUESTIONS:
  * -thread safety: does user ensure thread safety or the metadata store?
@@ -72,20 +74,251 @@ int strcat_s(char *dest, size_t destsz, const char* src)
   return 0;
 }
 
-
-
 /******************************************************************************
- * Metadata store buffer manager helper methods
+ * Meta-data-store I/O helper methods
  *****************************************************************************/
 
 typedef uint64_t page_no_t;
 typedef uint64_t file_no_t;
 
-
+/*/  
+ * @brief Page-file descriptor structure.
+ */
 struct PageFile {
-  int fd;
+  file_no_t file_no_;
+  int       refcnt_;
+  int       fd_;
 };
 
+
+/**
+ * @brief Returns page file descriptor of an active/open file.
+ *
+ * @details
+ * If the file is not open/active then the function returns null.
+ * 
+ * @note The current implementation relies on simply scanning an 
+ * array so it is obviously not efficient for a large number of 
+ * active files. 
+ */
+static struct PageFile* mds_io_lookup_file_desc(
+  struct NvwalMdsContext* mds, 
+  file_no_t file_no)
+{
+  int i;
+  struct PageFile* found_pf = NULL;
+
+  for (i=0; i < kNvwalMdsMaxActivePagefiles; i++) {
+    struct PageFile* pf = mds->active_files_[i];
+    if (pf->file_no_ == file_no) {
+      found_pf = pf;
+      break;
+    }
+  }
+  return found_pf;
+}
+
+
+/**
+ * @brief Adds page file descriptor to table of active/open files.
+ * 
+ * @details
+ * Assumes the caller has already checked that the page file descriptor
+ * does not exist in the table.
+ */
+static nvwal_error_t mds_io_add_file_desc(
+  struct NvwalMdsContext* mds,
+  struct PageFile* file)
+{
+  int i;
+  int empty_slot = -1;
+
+  for (i=0; i < kNvwalMdsMaxActivePagefiles; i++) {
+    struct PageFile* pf = mds->active_files_[i];
+    if (!pf) {
+      empty_slot = i;
+      break;
+    }
+  }
+  if (empty_slot < 0) {
+    return nvwal_raise_einval("Error: no free space in table of active files\n");
+  }
+  mds->active_files_[empty_slot] = file;
+  return 0; 
+}
+
+
+/**
+ * @brief Removes page file descriptor from table of known active/open files.
+ */
+static void mds_io_remove_file_desc(
+  struct NvwalMdsContext* mds,
+  struct PageFile* file)
+{
+  int i;
+
+  for (i=0; i < kNvwalMdsMaxActivePagefiles; i++) {
+    struct PageFile* pf = mds->active_files_[i];
+    if (pf->file_no_ == file->file_no_) {
+      mds->active_files_[i] = NULL;
+      break;
+    }
+  }
+}
+
+
+/**
+ * @brief Allocates and initializes a page-file descriptor.
+ * 
+ * @details
+ * Memory allocated for the returned descriptor can be freed using free().
+ */
+static struct PageFile* alloc_page_file_desc(file_no_t file_no, int fd)
+{
+  struct PageFile* file;
+
+  if (!(file = malloc(sizeof(*file)))) {
+    return NULL;
+  }
+
+  file->file_no_ = file_no;
+  file->refcnt_ = 1;
+  file->fd_ = fd;
+  
+  return file;
+}
+
+
+static nvwal_error_t mds_io_init(struct NvwalMdsContext* mds)
+{
+  int i;
+
+  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    mds->active_files_[i] = NULL;   
+  }
+
+  return 0;
+}
+
+/**
+ * @brief Opens a page file and provides a page-file descriptor for this file.
+ *  
+ * FIXME: Use direct i/o
+ */
+static nvwal_error_t mds_io_open_file(
+  struct NvwalMdsContext* mds, 
+  file_no_t file_no,
+  struct PageFile** file)
+{
+  nvwal_error_t ret;
+  int fd = -1;
+  char pathname[kNvwalMaxPathLength];
+  
+  if ((*file = mds_io_lookup_file_desc(mds, file_no))) {
+    assert((*file)->file_no_ == file_no);
+    assert((*file)->fd_ > -1);
+    (*file)->refcnt_++;
+    return 0;
+  }
+
+  nvwal_concat_sequence_filename(
+    mds->config_.disk_root_,
+    MDS_PAGE_FILE_PREFIX,
+    file_no,
+    pathname);
+    
+  fd = open(pathname, O_RDWR|O_APPEND);
+
+  if (fd == -1) {
+    /** Failed to open/create the file! */
+    ret = errno;
+    goto error_return;
+  }
+
+  *file = alloc_page_file_desc(file_no, fd);
+  assert(*file);
+  ret = mds_io_add_file_desc(mds, *file);
+
+  return ret;
+ 
+error_return:
+  errno = ret;
+  return ret;
+}
+
+
+/**
+ * @brief Creates a page file and provides a page-file descriptor for this file.
+ */
+static nvwal_error_t mds_io_create_file(
+  struct NvwalMdsContext* mds, 
+  file_no_t file_no, 
+  struct PageFile** file)
+{
+  nvwal_error_t ret;
+  int fd = -1;
+  char pathname[kNvwalMaxPathLength];
+
+  nvwal_concat_sequence_filename(
+    mds->config_.disk_root_,
+    MDS_PAGE_FILE_PREFIX,
+    file_no,
+    pathname);
+    
+  fd = open(pathname,
+            O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
+            S_IRUSR|S_IWUSR);
+
+  if (fd == -1) {
+    /** Failed to open/create the file! */
+    ret = errno;
+    goto error_return;
+  }
+
+  /* 
+   * Sync the parent directory, so that the newly created (empty) file is visible.
+   */
+  ret = nvwal_open_and_fsync(mds->config_.disk_root_);
+  if (ret) {
+    goto error_return;
+  }
+ 
+  *file = alloc_page_file_desc(file_no, fd);
+  assert(*file);
+  ret = mds_io_add_file_desc(mds, *file);
+
+  return ret;
+ 
+error_return:
+  errno = ret;
+  return ret;
+}
+
+/**
+ * @brief Closes a page file.
+ *
+ * @details
+ * This function only closes the file if no other File descriptor exist that 
+ * access the same file.
+ */
+static void mds_io_close_file(
+  struct NvwalMdsContext* mds,
+  struct PageFile* file)
+{
+  file->refcnt_--;
+  if (file->refcnt_ > 0) {
+    return;
+  }
+  close(file->fd_);
+  mds_io_remove_file_desc(mds, file);
+  free(file);  
+}
+
+
+
+/******************************************************************************
+ * Meta-data-store buffer-manager helper methods
+ *****************************************************************************/
 
 /**
  * @brief Represents a buffer frame. 
@@ -94,41 +327,143 @@ struct PageFile {
  * The frame can be either persistent (mapped to NVRAM) or 
  * volatile (mapped to DRAM).
  */
-struct Buffer {
-  struct PageFile file_;
-  page_no_t       page_no;
-  int             nvram_fd;
-  void*           base_addr;
-  int             writable;
+struct NvwalMdsBuffer {
+  struct PageFile* file_;
+  page_no_t        page_no;
+  int              nv_fd;
+  void*            baseaddr;
+  int              writable;
 };
 
 
 
-nvwal_error_t bfmgr_init(
+nvwal_error_t mds_bufmgr_init(
   const struct NvwalConfig* config,
-  struct NvwalMdsBufferManagerContext* bfmgr)
+  struct NvwalMdsBufferManagerContext* bufmgr)
 {
-  /* TODO: implement me */
+  bufmgr->buffer_ = NULL;
   return 0;
 }
+
+
+nvwal_error_t create_nvram_buffer_file(
+  struct NvwalMdsContext* mds,
+  int buffer_id)
+{
+  nvwal_error_t ret;
+  int nv_fd;
+  char pathname[256];
+
+  nvwal_concat_sequence_filename(
+    mds->config_.nv_root_,
+    MDS_NVRAM_BUFFER_FILE_PREFIX,
+    buffer_id,
+    pathname);
+    
+  nv_fd = open(pathname,
+            O_CREAT|O_RDWR|O_TRUNC,
+            S_IRUSR|S_IWUSR);
+
+  if (nv_fd == -1) {
+    /** Failed to open/create the file! */
+    ret = errno;
+    goto error_return;
+  }
+
+  /** posix_fallocate doesn't set errno, do it ourselves */
+  ret = posix_fallocate(nv_fd, 0, mds->config_.mds_page_size_);
+  if (ret) {
+    goto error_return;
+  }
+
+  fsync(nv_fd);
+  close(nv_fd);
+
+  /* 
+   * Sync the parent directory, so that the newly created (empty) file is visible.
+   */
+  ret = nvwal_open_and_fsync(mds->config_.nv_root_);
+  if (ret) {
+    goto error_return;
+  }
+
+  return 0;
+
+error_return:
+  errno = ret;
+  return ret;
+}
+
+
+nvwal_error_t map_nvram_buffer_file(
+  struct NvwalMdsContext* mds,
+  int buffer_id,
+  void** nv_baseaddr) 
+{
+  nvwal_error_t ret;
+  int nv_fd;
+  char pathname[256];
+
+  nvwal_concat_sequence_filename(
+    mds->config_.nv_root_,
+    MDS_NVRAM_BUFFER_FILE_PREFIX,
+    buffer_id,
+    pathname);
+    
+  nv_fd = open(pathname, O_RDWR|O_APPEND);
+
+  if (nv_fd == -1) {
+    /** Failed to open/create the file! */
+    ret = errno;
+    goto error_return;
+  }
+
+  /*
+   * Don't bother with (non-transparent) huge pages. Even libpmem doesn't try it.
+   */
+  *nv_baseaddr = mmap(0,
+                  mds->config_.mds_page_size_,
+                  PROT_READ | PROT_WRITE,
+                  MAP_SHARED,
+                  nv_fd,
+                  0);
+
+  if (*nv_baseaddr == MAP_FAILED) {
+    ret = errno;
+    goto error_return;
+  }
+  assert(*nv_baseaddr);
+
+  /* We no longer need the file descriptor as we will be accessing the file 
+   * through the memory mapping we just established.
+   */
+  close(nv_fd);
+
+  return 0;
+
+error_return:
+  errno = ret;
+  return ret;
+}
+
 
 
 /*
- *  should be able to reload last durable buffer and detect range of durable epoch records by scanning the buffer's backing file.
+ *  should be able to reload last ble buffer and detect range of durable epoch records by scanning the buffer's backing file.
  */
-nvwal_error_t bfmgr_recover()
+nvwal_error_t mds_bufmgr_restore_nvram_buffers()
 {
   /* TODO: implement me */
   return 0;
 }
 
-nvwal_error_t bfmgr_alloc_buffer(struct NvwalMdsBufferManagerContext* bfmgr, file_no_t file_no, page_no_t page_no)
+nvwal_error_t mds_bufmgr_alloc_buffer(struct NvwalMdsBufferManagerContext* bufmgr, file_no_t file_no, page_no_t page_no)
 {
   /* TODO: implement me */
   return 0;
 }
 
-nvwal_error_t alloc_nvram_buffer(struct NvwalMdsBufferManagerContext* bfmgr, struct Buffer* buffer)
+nvwal_error_t mds_bufmgr_alloc_nvram_buffer(struct NvwalMdsBufferManagerContext* bufmgr, struct NvwalMdsBuffer* buffer)
 {
 #if 0
   char pathname[1024];
@@ -146,31 +481,13 @@ nvwal_error_t alloc_nvram_buffer(struct NvwalMdsBufferManagerContext* bfmgr, str
 }
 
 
-nvwal_error_t map_nvram_buffer(struct NvwalMdsBufferManagerContext* bfmgr, struct Buffer* buffer)
-{
-  /* TODO: implement me */
-#if 0
-  void* baseaddr;
-  int fd;
-
-  baseaddr = mmap(0,
-                  kNvwalMdsPageSize,
-                  PROT_READ|PROT_WRITE,
-                  MAP_SHARED|MAP_POPULATE,
-                  fd,
-                  0);
-#endif  
-  return 0;
-}
-
-
-void bfmgr_read_page(struct NvwalMdsBufferManagerContext* bfmgr, page_no_t pgno, struct Buffer** bf) 
+void mds_bufmgr_read_page(struct NvwalMdsBufferManagerContext* bufmgr, page_no_t pgno, struct NvwalMdsBuffer** bf) 
 {
   /* TODO: implement me */
 }
 
 
-void bfmgr_write_page(struct NvwalMdsBufferManagerContext* bfmgr, struct Buffer* bf) 
+void mds_bufmgr_alloc_page(struct NvwalMdsBufferManagerContext* bufmgr, struct NvwalMdsBuffer* bf) 
 {
   /* TODO: implement me */
 }
@@ -186,17 +503,12 @@ nvwal_error_t mds_init(
   const struct NvwalConfig* config, 
   struct NvwalContext* wal) 
 {
-/*
- just do some barebones initialization 
- do not restore any nvram buffers. this is done as part of a separate recover function
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
 
- takes nv_root_fd folder where to store durable buffer and block_root_fd folder where to store disk pages
- or instead of file descriptors, it takes paths
+  mds_io_init(mds);
+  mds_bufmgr_init(config, bufmgr);
  
-  
- if no durable buffer, then allocate one
- */
-  /* TODO: implement me */
   return 0;
 }
 
@@ -213,6 +525,8 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
 /*
  perform recovery:
    restore nvram buffers
+   for each nvram buffer, find epoch id range and connect it to the appropriate page file.
+
    locate most latest durable epoch in nvram buffers
    find the latest disk metadata page
  
@@ -246,9 +560,9 @@ file_no_t epoch_id_to_file_no(struct NvwalMdsContext* wal, nvwal_epoch_t epoch_i
 struct PageFile* epoch_id_to_file(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
   file_no_t fno = epoch_id_to_file_no(mds, epoch_id);
-  struct PageFile* pf = mds->active_pagefiles_[fno];
+  struct PageFile* pf = mds->active_files_[fno];
   if (!pf) {
-    //open_pagefile(mds, fno, &pf);
+    //open_file(mds, fno, &pf);
   }
   return NULL; 
 }
@@ -287,55 +601,12 @@ nvwal_error_t mds_write_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_i
     now we have a buffer, write epoch record to nvram buffer, sync the nvram buffer. 
   */
   /* TODO: implement me */
-  return 0;
-}
-
-
-
-
-nvwal_error_t __mds_open_pagefile(
-  struct NvwalMdsContext* mds, 
-  file_no_t file_no, 
-  struct PageFile** pagefile)
-{
-  int fd = -1;
-  char filename[kNvwalMaxPathLength];
-
-  snprintf(filename, kNvwalMaxPathLength, "%s%lu", MDS_PAGE_FILE_PREFIX, file_no);
-  fd = openat(mds->block_root_fd_,
-              filename,
-              O_RDWR|O_APPEND);
-
-  ASSERT_FD_VALID(fd);
-  //*pagefile = malloc(sizeof(**pagefile));
-  //(*pagefile)->fd = fd;
-  return 0;
-}
-
-
-nvwal_error_t __mds_create_pagefile(struct NvwalMdsContext* mds, file_no_t file_no)
-{
-  int fd = -1;
-  char filename[kNvwalMaxPathLength];
-
-  snprintf(filename, kNvwalMaxPathLength, "%s%lu", MDS_PAGE_FILE_PREFIX, file_no);
-  fd = openat(mds->block_root_fd_,
-              filename,
-              O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
-              S_IRUSR|S_IWUSR);
-
-  ASSERT_FD_VALID(fd);
-
-  close(fd);
-
-  /* 
-   * Sync the directory, so that the newly created (empty) file is 
-   * visible.
-   */
-  fsync(mds->block_root_fd_);
   
+
   return 0;
 }
+
+
 
 
 void init_buffer() {
@@ -415,67 +686,5 @@ void init_nvram_buffer(
 
 
 
-
-void open_and_map_nvram_file(
-  struct nvwal_context * wal,
-  int root_fd,
-  int i) {
-  struct nvwal_log_segment * seg = &wal->segment[i];
-  int fd;
-  char filename[256];
-  void * baseaddr;
-
-  snprintf(filename, "mds-nvram-buffer-%lu", i);
-  fd = openat(root_fd, filename, O_CREAT|O_RDWR);
-  ASSERT_FD_VALID(fd);
-
-  //posix_fallocate doesn't set errno, do it ourselves
-  errno = posix_fallocate(fd, 0, kNvwalSegmentSize);
-  ASSERT_NO_ERROR(err);
-  err = ftruncate(fd, kNvwalSegmentSize);
-  ASSERT_NO_ERROR(err);
-  fsync(fd);
-
-  /* First try for a hugetlb mapping */
-  baseaddr = mmap(0,
-                  kNvwalSegmentSize,
-                  PROT_READ|PROT_WRITE,
-                  MAP_SHARED|MAP_PREALLOC|MAP_HUGETLB
-                  fd,
-                  0);
-
-  if (baseaddr == MAP_FAILED && errno == EINVAL) {
-    /* If that didn't work, try for a non-hugetlb mapping */
-    printf(stderr, "Failed hugetlb mapping\n");
-    baseaddr = mmap(0,
-                    kNvwalSegmentSize,
-                    PROT_READ|PROT_WRITE,
-                    MAP_SHARED|MAP_PREALLOC,
-                    fd,
-                    0);
-  }
-  /* If that didn't work then bail. */
-  ASSERT_NO_ERROR(baseaddr == MAP_FAILED);
-
-  /* Even with fallocate we don't trust the metadata to be stable
-    * enough for userspace durability. Actually write some bytes! */
-
-  memset(baseaddr, 0x42, kNvwalSegmentSize);
-  msync(baseaddr, kNvwalSegmentSize, MS_SYNC);
-
-  seg->seq = INVALID_SEQNUM;
-  seg->nvram_fd = fd;
-  seg->disk_fd = -1;
-  seg->nv_baseaddr = baseaddr;
-  seg->state = SEG_UNUSED;
-  seg->dir_synced = 0;
-
-  /* Is this necessary? I'm assuming this is offset into the disk-backed file.
-   * If we have one disk file per nvram segment, we don't need this.
-   * When we submit_write a segment, the FS should be tracking the file offset
-   * for us anyway. What is this actually used for?
-   */
-  seg->disk_offset = 0;
-}
 
 #endif

@@ -26,4 +26,5 @@ struct NvwalContext;
 struct NvwalLogSegment;
 struct NvwalWriterContext;
 struct NvwalWriterEpochFrame;
+struct NvwalMdsBuffer;
 #endif  /* NVWAL_FWD_H_ */

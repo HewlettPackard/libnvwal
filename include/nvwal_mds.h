@@ -37,6 +37,12 @@
  *
  * @param[in] config runtime configuration parameters
  * @param[out] wal nvwal context 
+ *
+ * @notes
+ * This function just does some basic initialization. It does not restore 
+ * any durable state. Instead, the user has to call a separate recover 
+ * function to restore such state.
+ *
  */
 nvwal_error_t mds_init(
   const struct NvwalConfig* config, 
