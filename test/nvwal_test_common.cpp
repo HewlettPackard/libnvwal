@@ -86,7 +86,6 @@ nvwal_error_t TestContext::init_all() {
     // Both disk_root and nv_root are wal_root.
     std::memcpy(config.disk_root_, wal_root.string().data(), wal_root.string().length());
     std::memcpy(config.nv_root_, wal_root.string().data(), wal_root.string().length());
-    config.numa_domain_ = w;
     config.nv_quota_ = kNvQuota;
     config.segment_size_ = kSegSize;
     config.writer_buffer_size_ = kWriterBufferSize;

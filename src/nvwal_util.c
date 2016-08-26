@@ -81,9 +81,9 @@ void nvwal_concat_sequence_filename(
   for (cpos = 0; cpos < 8; ++cpos) {
     c = (sequence >> (cpos * 4)) & 0xF;
     if (c < 10) {
-      out[out_len + 8 - cpos] = '0' + c;
+      out[out_len + 7 - cpos] = '0' + c;
     } else {
-      out[out_len + 8 - cpos] = 'A' + c;
+      out[out_len + 7 - cpos] = 'A' + (c - 10);
     }
   }
   out_len += 8;

@@ -73,12 +73,16 @@ nvwal_error_t nvwal_init(
   /** Check/adjust nv_root/disk_root */
   wal->config_.nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
   wal->config_.disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
-  if (wal->config_.nv_root_len_ >= kNvwalMaxPathLength) {
+  if (wal->config_.nv_root_len_ <= 1U) {
+    return nvwal_raise_einval("Error: nv_root must be a valid full path\n");
+  } else if (wal->config_.nv_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: nv_root must be null terminated\n");
   } else if (wal->config_.nv_root_len_ >= kNvwalMaxFolderPathLength) {
     return nvwal_raise_einval_llu(
       "Error: nv_root must be at most %llu characters\n",
       kNvwalMaxFolderPathLength);
+  } else if (wal->config_.disk_root_len_ <= 1U) {
+    return nvwal_raise_einval("Error: disk_root must be a valid full path\n");
   } else if (wal->config_.disk_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: disk_root_ must be null terminated\n");
   } else if (wal->config_.disk_root_len_ >= kNvwalMaxFolderPathLength) {

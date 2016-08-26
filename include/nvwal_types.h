@@ -224,7 +224,7 @@ enum NvwalConstants {
   /**
    * @brief Largest number of log segments being actively written.
    * @details
-   * The number of active log segments is calculated from nv_quota / kNvwalSegmentSize.
+   * The number of active log segments is calculated from nv_quota / segment_size.
    * This constant defines the largest possible number for that.
    * If nv_quota demands more than this, nvwal_init() returns an error.
    */
@@ -308,8 +308,6 @@ struct NvwalConfig {
    */
   nvwal_epoch_t resuming_epoch_;
 
-  uint32_t numa_domain_;
-
   /**
    * Number of log writer threads on this WAL instance.
    * This value must be kNvwalMaxWorkers or less.
@@ -328,16 +326,6 @@ struct NvwalConfig {
 
   /** Size of (volatile) buffer for each writer-thread. */
   uint64_t writer_buffer_size_;
-
-  /**
-    * How many on-disk log segments to create a time (empty files)
-    * This reduces the number of times we have to fsync() the directory
-    */
-  /*
-  uint32_t prealloc_file_count_;
-
-  uint64_t option_flags_;
-  */
 
   /**
    * Buffer of writer_buffer_size bytes for each writer-thread,
