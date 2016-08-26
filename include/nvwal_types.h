@@ -260,11 +260,14 @@ enum NvwalConstants {
 
   /**
    * @brief Largest number of pages files being actively written.
-   * 
-   * @note Currently, we support a single page file so we don't 
-   * expect to have more than one active page file.
    */
   kNvwalMdsMaxActivePagefiles = 1U,
+
+  /**
+   * @brief Largest number of pages being buffered.
+   */
+  kNvwalMdsMaxBufferPages = 1U,
+
 };
 
 /**
@@ -508,7 +511,11 @@ struct NvwalLogSegment {
  * @brief Represents a context of a meta-data-store buffer-manager instance.
  */
 struct NvwalMdsBufferManagerContext {
-  struct Buffer* buffer_;
+  /** Runtime configuration parameters */
+  struct NvwalConfig config_;
+
+  /** Buffers */
+  struct Buffer* buffers_[kNvwalMdsMaxBufferPages];
 };
 
 /**
