@@ -91,7 +91,7 @@ nvwal_error_t nvwal_init(
       kNvwalMaxWorkers);
   } else if ((config->writer_buffer_size_ % 512U) || config->writer_buffer_size_ == 0) {
     return nvwal_raise_einval(
-      "Error: writer_buffer_size must be a non-zero multiple of page size (512)\n");
+      "Error: writer_buffer_size must be a non-zero multiply of page size (512)\n");
   }
 
   for (i = 0; i < config->writer_count_; ++i) {
@@ -102,19 +102,24 @@ nvwal_error_t nvwal_init(
     }
   }
 
-  wal->segment_count_ = config->nv_quota_ / kNvwalSegmentSize;
-  if (config->nv_quota_ % kNvwalSegmentSize != 0) {
-    return nvwal_raise_einval_llu(
-      "Error: nv_quota must be a multiple of %llu\n",
-      kNvwalSegmentSize);
+  if (wal->config_.segment_size_ % 512 != 0) {
+    return nvwal_raise_einval(
+      "Error: segment_size_ must be a multiply of 512\n");
+  }
+  if (wal->config_.segment_size_ == 0) {
+    wal->config_.segment_size_ = kNvwalDefaultSegmentSize;
+  }
+  wal->segment_count_ = wal->config_.nv_quota_ / wal->config_.segment_size_;
+  if (wal->config_.nv_quota_ % wal->config_.segment_size_ != 0) {
+    return nvwal_raise_einval(
+      "Error: nv_quota must be a multiply of segment size\n");
   } else if (wal->segment_count_ < 2U) {
-    return nvwal_raise_einval_llu(
-      "Error: nv_quota must be at least %llu\n",
-      2ULL * kNvwalSegmentSize);
+    return nvwal_raise_einval(
+      "Error: nv_quota must be at least of two segments\n");
   } else if (wal->segment_count_ > kNvwalMaxActiveSegments) {
     return nvwal_raise_einval_llu(
-      "Error: nv_quota must be at most %llu\n",
-      (uint64_t) kNvwalMaxActiveSegments * kNvwalSegmentSize);
+      "Error: nv_quota must be at most %llu segments\n",
+      (uint64_t) kNvwalMaxActiveSegments);
   }
 
   wal->durable_ = config->resuming_epoch_;
@@ -176,7 +181,7 @@ error_return:
 }
 
 nvwal_error_t init_fresh_nvram_segment(
-  struct NvwalContext * wal,
+  struct NvwalContext* wal,
   struct NvwalLogSegment* segment,
   nvwal_dsid_t dsid) {
   nvwal_error_t ret;
@@ -189,6 +194,8 @@ nvwal_error_t init_fresh_nvram_segment(
   ret = 0;
   nv_fd = 0;
   nv_baseaddr = 0;
+
+  segment->parent_ = wal;
 
   nvwal_concat_sequence_filename(
     wal->config_.nv_root_,
@@ -209,21 +216,19 @@ nvwal_error_t init_fresh_nvram_segment(
 
   assert(nv_fd);  /** open never returns 0 */
 
-  /** posix_fallocate doesn't set errno, do it ourselves */
-  ret = posix_fallocate(nv_fd, 0, kNvwalSegmentSize);
-  if (ret) {
+  if (posix_fallocate(nv_fd, 0, wal->config_.segment_size_)) {
+    /** posix_fallocate doesn't set errno, do it ourselves */
+    ret = EINVAL;
     goto error_return;
   }
 
-  ftruncate(nv_fd, kNvwalSegmentSize);
-  if (errno) {
+  if (ftruncate(nv_fd, wal->config_.segment_size_)) {
     /** Failed to set the file length! */
     ret = errno;
     goto error_return;
   }
 
-  fsync(nv_fd);
-  if (errno) {
+  if (fsync(nv_fd)) {
     /** Failed to fsync! */
     ret = errno;
     goto error_return;
@@ -233,7 +238,7 @@ nvwal_error_t init_fresh_nvram_segment(
    * Don't bother (non-transparent) huge pages. Even libpmem doesn't try it.
    */
   nv_baseaddr = mmap(0,
-                  kNvwalSegmentSize,
+                  wal->config_.segment_size_,
                   PROT_READ | PROT_WRITE,
                   MAP_ANONYMOUS | MAP_PRIVATE,
                   nv_fd,
@@ -249,8 +254,8 @@ nvwal_error_t init_fresh_nvram_segment(
    * Even with fallocate we don't trust the metadata to be stable
    * enough for userspace durability. Actually write some bytes!
    */
-  memset(nv_baseaddr, 0, kNvwalSegmentSize);
-  msync(nv_baseaddr, kNvwalSegmentSize, MS_SYNC);
+  memset(nv_baseaddr, 0, wal->config_.segment_size_);
+  msync(nv_baseaddr, wal->config_.segment_size_, MS_SYNC);
 
   segment->dsid_ = dsid;
   segment->nv_fd_ = nv_fd;
@@ -309,7 +314,7 @@ nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
   ret = 0;
 
   if (segment->nv_baseaddr_ && segment->nv_baseaddr_ != MAP_FAILED) {
-    if (munmap(segment->nv_baseaddr_, kNvwalSegmentSize) == -1) {
+    if (munmap(segment->nv_baseaddr_, segment->parent_->config_.segment_size_) == -1) {
       ret = nvwal_stock_error_code(ret, errno);
     }
   }

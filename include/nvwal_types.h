@@ -231,10 +231,10 @@ enum NvwalConstants {
   kNvwalMaxActiveSegments = 1024U,
 
   /**
-   * DESCRIBE ME.
+   * Used as the segment size if the user hasn't speficied any.
    * 32MB sounds like a good place to start?
    */
-  kNvwalSegmentSize = 1ULL << 25,
+  kNvwalDefaultSegmentSize = 1ULL << 25,
 
   /**
    * \li [oldest] : the oldest frame this writer \e might be using.
@@ -317,12 +317,14 @@ struct NvwalConfig {
    */
   uint32_t writer_count_;
 
-  /** How big our nvram segments are */
-  uint64_t nv_seg_size_;
-  uint64_t nv_quota_;
+  /**
+   * Byte size of each segment, either on disk or NVDIMM.
+   * Must be a multiply of 512.
+   * If this is 0 (not set), we automatically set kNvwalDefaultSegmentSize.
+   */
+  uint64_t segment_size_;
 
-  /** Assumed to be the same as nv_seg_size for now */
-  uint64_t block_seg_size_;
+  uint64_t nv_quota_;
 
   /** Size of (volatile) buffer for each writer-thread. */
   uint64_t writer_buffer_size_;
@@ -458,6 +460,9 @@ struct NvwalWriterContext {
  * copied by memcpy, and no need to free any thing \b except \b file \b descriptors and \b mmap.
  */
 struct NvwalLogSegment {
+  /** Back pointer to the parent WAL context. */
+  struct NvwalContext* parent_;
+
   /**
    * mmap-ed virtual address for this segment on NVDIMM.
    * It is never MAP_FAILED. We treat that case as soon as we invoke mmap.

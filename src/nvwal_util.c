@@ -121,7 +121,7 @@ nvwal_error_t nvwal_open_and_fsync(const char* path) {
   nvwal_error_t ret;
   int fd;
 
-  fd = open(path, O_RDWR, 0);
+  fd = open(path, 0, 0);
   if (fd == -1) {
     return errno;
   }
