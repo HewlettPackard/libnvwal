@@ -307,9 +307,11 @@ struct NvwalConfig {
     * How many on-disk log segments to create a time (empty files)
     * This reduces the number of times we have to fsync() the directory
     */
+  /*
   uint32_t prealloc_file_count_;
 
   uint64_t option_flags_;
+  */
 
   /**
    * Buffer of writer_buffer_size bytes for each writer-thread,

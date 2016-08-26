@@ -26,22 +26,15 @@
  * @{
  */
 
-#include <errno.h>
-#include <stdio.h>
-
 #include "nvwal_types.h"
 
-inline nvwal_error_t nvwal_raise_einval(const char* message) {
-  fprintf(stderr, message);
-  errno = EINVAL;
-  return EINVAL;
-}
+#ifdef __cplusplus
+extern "C" {
+#endif  /* __cplusplus */
 
-inline nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param) {
-  fprintf(stderr, message, param);
-  errno = EINVAL;
-  return EINVAL;
-}
+nvwal_error_t nvwal_raise_einval(const char* message);
+
+nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param);
 
 /**
  * @brief A frequently occurring pattern in our code to construct a file name
@@ -85,14 +78,12 @@ nvwal_error_t nvwal_open_and_fsync(const char* path);
 /**
  * Used to retain the last-observed error.
  */
-inline nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code) {
-  if (new_code) {
-    return new_code;
-  } else {
-    return cur_code;
-  }
-}
+nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code);
 
 /** @} */
+
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
 
 #endif  /* NVWAL_UTIL_H_ */

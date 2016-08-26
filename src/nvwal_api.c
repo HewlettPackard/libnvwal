@@ -102,7 +102,7 @@ nvwal_error_t nvwal_init(
   }
 
   wal->segment_count_ = config->nv_quota_ / kNvwalSegmentSize;
-  if (config->nv_quota_ % kNvwalSegmentSize) {
+  if (config->nv_quota_ % kNvwalSegmentSize != 0) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be a multiple of %llu\n",
       kNvwalSegmentSize);
@@ -299,7 +299,7 @@ nvwal_error_t nvwal_uninit(
     ret = nvwal_stock_error_code(ret, uninit_log_segment(wal->segments_ + i));
   }
 
-  return 0;
+  return ret;
 }
 
 nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
@@ -622,68 +622,6 @@ void * fsync_thread_main(void * arg) {
             }
         }
     }
-}
-
-void init_nvram_segment(
-  struct NvwalContext * wal,
-  int root_fd,
-  int i) {
-  struct NvwalLogSegment * seg = &wal->segment[i];
-  int fd;
-  char filename[256];
-  void * baseaddr;
-
-  snprintf(filename, "nvwal-data-%lu", i);
-  fd = openat(root_fd, filename, O_CREAT|O_RDWR);
-  assert(fd);
-
-  //posix_fallocate doesn't set errno, do it ourselves
-  posix_fallocate(fd, 0, kNvwalSegmentSize);
-  assert(errno == 0);
-  ftruncate(fd, kNvwalSegmentSize);
-  assert(errno == 0);
-  fsync(fd);
-
-  /* First try for a hugetlb mapping */
-  baseaddr = mmap(0,
-                  kNvwalSegmentSize,
-                  PROT_READ|PROT_WRITE,
-                  MAP_SHARED|MAP_PREALLOC|MAP_HUGETLB
-                  fd,
-                  0);
-
-  if (baseaddr == MAP_FAILED && errno == EINVAL) {
-    /* If that didn't work, try for a non-hugetlb mapping */
-    printf(stderr, "Failed hugetlb mapping\n");
-    baseaddr = mmap(0,
-                    kNvwalSegmentSize,
-                    PROT_READ|PROT_WRITE,
-                    MAP_SHARED|MAP_PREALLOC,
-                    fd,
-                    0);
-  }
-  /* If that didn't work then bail. */
-  assert(baseaddr != MAP_FAILED);
-
-  /* Even with fallocate we don't trust the metadata to be stable
-    * enough for userspace durability. Actually write some bytes! */
-
-  memset(baseaddr, 0x42, kNvwalSegmentSize);
-  msync(baseaddr, kNvwalSegmentSize, MS_SYNC);
-
-  seg->seq = INVALID_SEQNUM;
-  seg->nvram_fd = fd;
-  seg->disk_fd = -1;
-  seg->nv_baseaddr = baseaddr;
-  seg->state = SEG_UNUSED;
-  seg->dir_synced = 0;
-
-  /* Is this necessary? I'm assuming this is offset into the disk-backed file.
-   * If we have one disk file per nvram segment, we don't need this.
-   * When we submit_write a segment, the FS should be tracking the file offset
-   * for us anyway. What is this actually used for?
-   */
-  seg->disk_offset = 0;
 }
 
 void submit_write(

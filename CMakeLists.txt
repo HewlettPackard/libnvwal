@@ -60,8 +60,16 @@ add_library(nvwal-shared SHARED ${WAL_SOURCE_FILES})
 target_link_libraries(nvwal-static ${CMAKE_THREAD_LIBS_INIT} ${PMEM_LIBRARY})
 target_link_libraries(nvwal-shared ${CMAKE_THREAD_LIBS_INIT} ${PMEM_LIBRARY})
 
-add_subdirectory(test)
-add_subdirectory(third_party)
+# Unit tests. If you give -DNO_NVWAL_TEST, we skip the following.
+# This is useful for a production environment to quickly build libnvwal
+# without additional dependencies for test.
+# Other than those cases, we recommend building/running testcases always.
+if(NO_NVWAL_TEST)
+  message(STATUS "NO_NVWAL_TEST was specified all testcases and their dependencies skipped")
+else(NO_NVWAL_TEST)
+  add_subdirectory(test)
+  add_subdirectory(third_party) # all of them are just for test
+endif(NO_NVWAL_TEST)
 
 #############################################################################
 #
