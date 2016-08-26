@@ -27,6 +27,26 @@
 
 #include "nvwal_types.h"
 
+nvwal_error_t nvwal_raise_einval(const char* message) {
+  fprintf(stderr, message);
+  errno = EINVAL;
+  return EINVAL;
+}
+
+nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param) {
+  fprintf(stderr, message, param);
+  errno = EINVAL;
+  return EINVAL;
+}
+
+nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code) {
+  if (new_code) {
+    return new_code;
+  } else {
+    return cur_code;
+  }
+}
+
 void nvwal_concat_sequence_filename(
   const char* folder,
   const char* file_prefix,

@@ -145,13 +145,13 @@ nvwal_error_t nvwal_query_durable_epoch(
  * Do NOT use straightforward "left > right". We must be wrap-around-aware.
  * Equality is fine.
  */
-inline uint8_t nvwal_is_epoch_after(nvwal_epoch_t left, nvwal_epoch_t right) {
+static inline uint8_t nvwal_is_epoch_after(nvwal_epoch_t left, nvwal_epoch_t right) {
   /** see http://en.wikipedia.org/wiki/Serial_number_arithmetic */
   uint64_t diff = left - right;
   return (diff != 0) && (diff < (1ULL << 63));
 }
 /** @see nvwal_is_epoch_after */
-inline uint8_t nvwal_is_epoch_equal_or_after(nvwal_epoch_t left, nvwal_epoch_t right) {
+static inline uint8_t nvwal_is_epoch_equal_or_after(nvwal_epoch_t left, nvwal_epoch_t right) {
   return left == right || nvwal_is_epoch_after(left, right);
 }
 
@@ -160,7 +160,7 @@ inline uint8_t nvwal_is_epoch_equal_or_after(nvwal_epoch_t left, nvwal_epoch_t r
  * @details
  * Do NOT use straightforward "++epoch". We must skip kNvwalInvalidEpoch on wrap-around.
  */
-inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
+static inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
   nvwal_epoch_t ret = epoch + 1ULL;
   if (ret == kNvwalInvalidEpoch) {
     return ret + 1ULL;
