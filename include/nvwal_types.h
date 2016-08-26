@@ -515,7 +515,7 @@ struct NvwalMdsBufferManagerContext {
   struct NvwalConfig config_;
 
   /** Buffers */
-  struct Buffer* buffers_[kNvwalMdsMaxBufferPages];
+  struct NvwalMdsBuffer* buffers_[kNvwalMdsMaxBufferPages];
 };
 
 /**
