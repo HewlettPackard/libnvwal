@@ -30,7 +30,7 @@
 #include "nvwal_types.h"
 #include "nvwal_mds.h"
 
-#define ASSERT_FD_VALID assert
+#define ASSERT_FD_VALID(fd) assert(fd != -1)
 
 #define MDS_NVRAM_BUFFER_FILE_PREFIX  "mds-nvram-buffer-"
 #define MDS_PAGE_FILE_PREFIX          "mds-pagefile-"
@@ -74,11 +74,8 @@ int strcat_s(char *dest, size_t destsz, const char* src)
 
 
 
-
 /******************************************************************************
- *
- * METADATA-STORE BUFFER MANAGER 
- * 
+ * Metadata store buffer manager helper methods
  *****************************************************************************/
 
 typedef uint64_t page_no_t;
@@ -87,11 +84,6 @@ typedef uint64_t file_no_t;
 
 struct PageFile {
   int fd;
-};
-
-
-struct BufferManager {
-  int root_fd_;  
 };
 
 
@@ -112,9 +104,11 @@ struct Buffer {
 
 
 
-nvwal_error_t bfmgr_init() 
+nvwal_error_t bfmgr_init(
+  const struct NvwalConfig* config,
+  struct NvwalMdsBufferManagerContext* bfmgr)
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
@@ -124,17 +118,17 @@ nvwal_error_t bfmgr_init()
  */
 nvwal_error_t bfmgr_recover()
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
-nvwal_error_t bfmgr_alloc_buffer(struct BufferManager* bfmgr, file_no_t file_no, page_no_t page_no)
+nvwal_error_t bfmgr_alloc_buffer(struct NvwalMdsBufferManagerContext* bfmgr, file_no_t file_no, page_no_t page_no)
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
-nvwal_error_t alloc_nvram_buffer(struct BufferManager* bfmgr, struct Buffer* buffer)
+nvwal_error_t alloc_nvram_buffer(struct NvwalMdsBufferManagerContext* bfmgr, struct Buffer* buffer)
 {
 #if 0
   char pathname[1024];
@@ -152,9 +146,9 @@ nvwal_error_t alloc_nvram_buffer(struct BufferManager* bfmgr, struct Buffer* buf
 }
 
 
-nvwal_error_t map_nvram_buffer(struct BufferManager* bfmgr, struct Buffer* buffer)
+nvwal_error_t map_nvram_buffer(struct NvwalMdsBufferManagerContext* bfmgr, struct Buffer* buffer)
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
 #if 0
   void* baseaddr;
   int fd;
@@ -170,24 +164,27 @@ nvwal_error_t map_nvram_buffer(struct BufferManager* bfmgr, struct Buffer* buffe
 }
 
 
-void bfmgr_read_page(struct BufferManager* bfmgr, page_no_t pgno, struct Buffer** bf) 
+void bfmgr_read_page(struct NvwalMdsBufferManagerContext* bfmgr, page_no_t pgno, struct Buffer** bf) 
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
 }
 
 
-void bfmgr_write_page(struct BufferManager* bfmgr, struct Buffer* bf) 
+void bfmgr_write_page(struct NvwalMdsBufferManagerContext* bfmgr, struct Buffer* bf) 
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
 }
 
 
 
+/******************************************************************************
+ * Metadata store core methods
+ *****************************************************************************/
 
 
 nvwal_error_t mds_init(
   const struct NvwalConfig* config, 
-  struct MdsContext* mds) 
+  struct NvwalContext* wal) 
 {
 /*
  just do some barebones initialization 
@@ -199,19 +196,19 @@ nvwal_error_t mds_init(
   
  if no durable buffer, then allocate one
  */
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
 
-nvwal_error_t mds_uninit(struct MdsContext* mds)
+nvwal_error_t mds_uninit(struct NvwalContext* wal)
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
 
-nvwal_error_t mds_recover(struct MdsContext* mds) 
+nvwal_error_t mds_recover(struct NvwalContext* wal) 
 {
 /*
  perform recovery:
@@ -221,13 +218,57 @@ nvwal_error_t mds_recover(struct MdsContext* mds)
  
 */ 
 
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
-void mds_read_epoch(struct MdsContext* mds, nvwal_epoch_t epoch_id, struct EpochMetadata* epoch_metadata)
+/**
+ * @brief Return the file number of the page file storing metadata for 
+ * epoch \a epoch_id.
+ * 
+ * @note Currently, we support a single page file so we always return 0. 
+ */
+file_no_t epoch_id_to_file_no(struct NvwalMdsContext* wal, nvwal_epoch_t epoch_id)
 {
-  /* TODO: implemement me */
+  return 0;
+}
+
+
+/**
+ * @brief Return the descriptor of the page file storing metadata for 
+ * epoch \a epoch_id.
+ * 
+ * @details
+ * If the page file is not active then open it 
+ *
+ * @note Currently, we support a single page file. 
+ */
+struct PageFile* epoch_id_to_file(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
+{
+  file_no_t fno = epoch_id_to_file_no(mds, epoch_id);
+  struct PageFile* pf = mds->active_pagefiles_[fno];
+  if (!pf) {
+    //open_pagefile(mds, fno, &pf);
+  }
+  return NULL; 
+}
+
+
+/**
+ * @brief Return the page number of the page storing metadata for 
+ * epoch \a epoch_id.
+ * 
+ * @note Currently, we support a single page file.
+ */
+page_no_t epoch_id_to_page_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
+{
+  return epoch_id / (mds->config_.mds_page_size_ / sizeof(struct MdsEpochMetadata));  
+}
+
+
+void mds_read_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id, struct MdsEpochMetadata* epoch_metadata)
+{
+  /* TODO: implement me */
 }
 
 
@@ -237,7 +278,7 @@ void mds_read_epoch(struct MdsContext* mds, nvwal_epoch_t epoch_id, struct Epoch
  * - is epoch_metadata opaque to the user or do we open up the struct?
  * - do we support random write or just append?
  */
-nvwal_error_t mds_write_epoch(struct MdsContext* mds, nvwal_epoch_t epoch_id, struct EpochMetadata* epoch_metadata)
+nvwal_error_t mds_write_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id, struct MdsEpochMetadata* epoch_metadata)
 {
   /*
     epoch_id -> <file, page_no>
@@ -245,32 +286,39 @@ nvwal_error_t mds_write_epoch(struct MdsContext* mds, nvwal_epoch_t epoch_id, st
     if no buffer, then alloc buffer 
     now we have a buffer, write epoch record to nvram buffer, sync the nvram buffer. 
   */
-  /* TODO: implemement me */
+  /* TODO: implement me */
   return 0;
 }
 
 
-nvwal_error_t __mds_open_pagefile(struct MdsContext* mds, file_no_t file_no)
+
+
+nvwal_error_t __mds_open_pagefile(
+  struct NvwalMdsContext* mds, 
+  file_no_t file_no, 
+  struct PageFile** pagefile)
 {
   int fd = -1;
-  char filename[FILENAME_MAX_LEN];
+  char filename[kNvwalMaxPathLength];
 
-  snprintf(filename, FILENAME_MAX_LEN, "%s%lu", MDS_PAGE_FILE_PREFIX, file_no);
+  snprintf(filename, kNvwalMaxPathLength, "%s%lu", MDS_PAGE_FILE_PREFIX, file_no);
   fd = openat(mds->block_root_fd_,
               filename,
               O_RDWR|O_APPEND);
 
   ASSERT_FD_VALID(fd);
+  //*pagefile = malloc(sizeof(**pagefile));
+  //(*pagefile)->fd = fd;
   return 0;
 }
 
 
-nvwal_error_t __mds_create_pagefile(struct MdsContext* mds, file_no_t file_no)
+nvwal_error_t __mds_create_pagefile(struct NvwalMdsContext* mds, file_no_t file_no)
 {
   int fd = -1;
-  char filename[FILENAME_MAX_LEN];
+  char filename[kNvwalMaxPathLength];
 
-  snprintf(filename, FILENAME_MAX_LEN, "%s%lu", MDS_PAGE_FILE_PREFIX, file_no);
+  snprintf(filename, kNvwalMaxPathLength, "%s%lu", MDS_PAGE_FILE_PREFIX, file_no);
   fd = openat(mds->block_root_fd_,
               filename,
               O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
@@ -291,13 +339,13 @@ nvwal_error_t __mds_create_pagefile(struct MdsContext* mds, file_no_t file_no)
 
 
 void init_buffer() {
-  /* TODO: implemement me */
+  /* TODO: implement me */
 }
 
 
 void sync_backing_file()
 {
-  /* TODO: implemement me */
+  /* TODO: implement me */
 }
 
 

@@ -43,8 +43,15 @@ nvwal_error_t nvwal_init(
   struct NvwalContext* wal);
 
 /**
- * DESCRIBE ME.
- * @param[in] wal DESCRIBE ME
+ * @brief Releases all resources this WAL instance had.
+ * @param[in,out] wal WAL context to release
+ * @return Returns any non-zero error code we observed while releaseing.
+ * @details
+ * This method tries to release as much resource as possible even in
+ * catastrophic circumstance. It thus continues even after observing
+ * some error. The return value is thus the last error we observed.
+ * In case there are many issues happening, it might not be the
+ * root cause.
  */
 nvwal_error_t nvwal_uninit(
   struct NvwalContext* wal);
@@ -74,6 +81,30 @@ nvwal_error_t nvwal_uninit(
 nvwal_error_t nvwal_flusher_main(
   struct NvwalContext* wal);
 
+
+/**
+ * @brief This must be invoked by the client application after nvwal_init()
+ * to be the log fsync thread.
+ * @param[in] wal The fsyncer will be the only such kind on this WAL instance
+ * @details
+ * Each WAL instance has exactly one fsyncer that is responsible for
+ * invoking fsyncs on segments in parallel to flusher so that flusher
+ * can maximize its use of time.
+ * For the same reason as flusher, libnvwal lets
+ * the client application to launch a fsync thread and invoke this function
+ * themselves, rather than launching it ourselves.
+ *
+ * @attention The calling thread will \b block until nvwal_uninit() is invoked,
+ * or returns an error for whatever reason.
+ *
+ * @note (To be implemented) In NvwalConfig, there will be
+ * an option for libnvwal itself to
+ * launch a thread and invoke this method. In that case, the client application
+ * must make sure that the program is linked against pthread.
+ */
+nvwal_error_t nvwal_fsync_main(
+  struct NvwalContext* wal);
+
 /**
  * @brief Notifies libnvwal of a region of written logs in the given writer's log buffer.
  * @param[in] writer the writer that represents the calling thread itself
@@ -97,7 +128,7 @@ nvwal_error_t nvwal_on_wal_write(
  * wait until it becomes true. It is left the client application
  * whether to sleep, spin, or do something in the meantime.
  */
-bool nvwal_has_enough_writer_space(
+uint8_t nvwal_has_enough_writer_space(
   struct NvwalWriterContext* writer);
 
 /**
@@ -114,13 +145,13 @@ nvwal_error_t nvwal_query_durable_epoch(
  * Do NOT use straightforward "left > right". We must be wrap-around-aware.
  * Equality is fine.
  */
-inline bool nvwal_is_epoch_after(nvwal_epoch_t left, nvwal_epoch_t right) {
+inline uint8_t nvwal_is_epoch_after(nvwal_epoch_t left, nvwal_epoch_t right) {
   /** see http://en.wikipedia.org/wiki/Serial_number_arithmetic */
   uint64_t diff = left - right;
   return (diff != 0) && (diff < (1ULL << 63));
 }
 /** @see nvwal_is_epoch_after */
-inline bool nvwal_is_epoch_equal_or_after(nvwal_epoch_t left, nvwal_epoch_t right) {
+inline uint8_t nvwal_is_epoch_equal_or_after(nvwal_epoch_t left, nvwal_epoch_t right) {
   return left == right || nvwal_is_epoch_after(left, right);
 }
 

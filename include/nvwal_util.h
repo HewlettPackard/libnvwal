@@ -43,6 +43,56 @@ inline nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param)
   return EINVAL;
 }
 
+/**
+ * @brief A frequently occurring pattern in our code to construct a file name
+ * from a common prefix and fixed-size hex string.
+ * @param[in] folder Null-terminated folder path. Must be < kNvwalMaxFolderPathLength.
+ * It should not be ending with /. But, probably it works even if not...
+ * @param[in] file_prefix Null-terminated prefix filename. Must be within 16 characters.
+ * @param[in] sequence Integer to be hex-ed and appended to the file name.
+ * @param[out] out receive the constructed null-terminated filepath.
+ * Must be at least kNvwalMaxPathLength
+ */
+void nvwal_concat_sequence_filename(
+  const char* folder,
+  const char* file_prefix,
+  uint32_t sequence,
+  char* out);
+
+/**
+ * @brief Equivalent to open(2) with O_DIRECT flag.
+ * @details
+ * The difference from open(2) is that it internally retries to open if
+ * the filesystem refuses to receive O_DIRECT.
+ * tmpfs (such as /tmp, /dev/shm) refuses to receive O_DIRECT, returning EINVAL (22).
+ * In that case, let's retry without O_DIRECT flag. MySQL does similar thing, too.
+ * If even the retry fails, it just returns what open(2) returned.
+ * @return return value of open(2)
+ */
+int nvwal_open_best_effort_o_direct(
+  const char* path,
+  int oflag,
+  int mode);
+
+/**
+ * A convenience method to do open(), fsync(), then close().
+ * This is NOT recursive; we don't fsync the parent folder.
+ * If you are calling this method for a file whose file size might be changing,
+ * you must also call this for its parent folder.
+ */
+nvwal_error_t nvwal_open_and_fsync(const char* path);
+
+/**
+ * Used to retain the last-observed error.
+ */
+inline nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code) {
+  if (new_code) {
+    return new_code;
+  } else {
+    return cur_code;
+  }
+}
+
 /** @} */
 
 #endif  /* NVWAL_UTIL_H_ */
