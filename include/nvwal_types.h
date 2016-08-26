@@ -465,8 +465,8 @@ struct NvwalLogSegment {
 
   /**
    * mmap-ed virtual address for this segment on NVDIMM.
-   * It is never MAP_FAILED. We treat that case as soon as we invoke mmap.
-   * When it is non-null, libnvwal is responsible to unmap it durinng uninit.
+   * Both MAP_FAILED and NULL mean an invalid VA.
+   * When it is a valid VA, libnvwal is responsible to unmap it during uninit.
    */
   nvwal_byte_t* nv_baseaddr_;
 
@@ -499,17 +499,15 @@ struct NvwalLogSegment {
 
   /**
    * File descriptor on NVDIMM.
-   * It is never -1 (open has failed). We treat that case as soon as we invoke open.
-   * When it is non-zero, libnvwal is responsible to close it durinng uninit.
+   * Both -1 and 0 mean an invalid descriptor.
+   * When it is a valid FD, libnvwal is responsible to close it during uninit.
    */
   int64_t nv_fd_;
-  /**
-   * File descriptor on disk.
-   * It is never -1 (open has failed). We treat that case as soon as we invoke open.
-   * Set/read only by fsyncher.
-   * When it is non-zero, fsyncher is responsible to close it durinng uninit.
-   */
+  /*
+  we don't retain FD on disk. it's a local variable opened/used, then immediately
+  closed by the fsyncer. simpler!
   int64_t disk_fd_;
+  */
 };
 
 /**
