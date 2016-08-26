@@ -55,9 +55,8 @@ nvwal_error_t TestContext::init_all() {
   // TODO(Hideaki) : following must be based on sizing_
   const uint64_t kWriterBufferSize = 1ULL << 12;
   const uint16_t kWriterCount = 2;
-  const uint32_t kBlockSegSize = 1U << 12;
-  const uint32_t kNvSegSize = 1U << 12;
-  const uint64_t kNvQuota = 1ULL << 20;
+  const uint32_t kSegSize = 1U << 12;
+  const uint64_t kNvQuota = 1ULL << 16;
 
   uint64_t total_buffer_size = wal_count_ * kWriterBufferSize * kWriterCount;
   writer_buffer_memory_.reset(new char[total_buffer_size]);
@@ -87,10 +86,8 @@ nvwal_error_t TestContext::init_all() {
     // Both disk_root and nv_root are wal_root.
     std::memcpy(config.disk_root_, wal_root.string().data(), wal_root.string().length());
     std::memcpy(config.nv_root_, wal_root.string().data(), wal_root.string().length());
-    config.block_seg_size_ = kBlockSegSize;
-    config.numa_domain_ = w;
     config.nv_quota_ = kNvQuota;
-    config.nv_seg_size_ = kNvSegSize;
+    config.segment_size_ = kSegSize;
     config.writer_buffer_size_ = kWriterBufferSize;
     for (uint16_t wr = 0; wr < kWriterCount; ++wr) {
       config.writer_buffers_[wr] = cur_buffer_pos;

@@ -62,18 +62,27 @@ nvwal_error_t nvwal_init(
   struct NvwalWriterContext* writer;
   nvwal_dsid_t resuming_dsid;
 
+  /** otherwise the following memzero will also reset config, ouch */
+  if (config == &(wal->config_)) {
+    return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
+  }
+
   memset(wal, 0, sizeof(*wal));
   memcpy(&wal->config_, config, sizeof(*config));
 
   /** Check/adjust nv_root/disk_root */
   wal->config_.nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
   wal->config_.disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
-  if (wal->config_.nv_root_len_ >= kNvwalMaxPathLength) {
+  if (wal->config_.nv_root_len_ <= 1U) {
+    return nvwal_raise_einval("Error: nv_root must be a valid full path\n");
+  } else if (wal->config_.nv_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: nv_root must be null terminated\n");
   } else if (wal->config_.nv_root_len_ >= kNvwalMaxFolderPathLength) {
     return nvwal_raise_einval_llu(
       "Error: nv_root must be at most %llu characters\n",
       kNvwalMaxFolderPathLength);
+  } else if (wal->config_.disk_root_len_ <= 1U) {
+    return nvwal_raise_einval("Error: disk_root must be a valid full path\n");
   } else if (wal->config_.disk_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: disk_root_ must be null terminated\n");
   } else if (wal->config_.disk_root_len_ >= kNvwalMaxFolderPathLength) {
@@ -91,7 +100,7 @@ nvwal_error_t nvwal_init(
       kNvwalMaxWorkers);
   } else if ((config->writer_buffer_size_ % 512U) || config->writer_buffer_size_ == 0) {
     return nvwal_raise_einval(
-      "Error: writer_buffer_size must be a non-zero multiple of page size (512)\n");
+      "Error: writer_buffer_size must be a non-zero multiply of page size (512)\n");
   }
 
   for (i = 0; i < config->writer_count_; ++i) {
@@ -102,19 +111,24 @@ nvwal_error_t nvwal_init(
     }
   }
 
-  wal->segment_count_ = config->nv_quota_ / kNvwalSegmentSize;
-  if (config->nv_quota_ % kNvwalSegmentSize != 0) {
-    return nvwal_raise_einval_llu(
-      "Error: nv_quota must be a multiple of %llu\n",
-      kNvwalSegmentSize);
+  if (wal->config_.segment_size_ % 512 != 0) {
+    return nvwal_raise_einval(
+      "Error: segment_size_ must be a multiply of 512\n");
+  }
+  if (wal->config_.segment_size_ == 0) {
+    wal->config_.segment_size_ = kNvwalDefaultSegmentSize;
+  }
+  wal->segment_count_ = wal->config_.nv_quota_ / wal->config_.segment_size_;
+  if (wal->config_.nv_quota_ % wal->config_.segment_size_ != 0) {
+    return nvwal_raise_einval(
+      "Error: nv_quota must be a multiply of segment size\n");
   } else if (wal->segment_count_ < 2U) {
-    return nvwal_raise_einval_llu(
-      "Error: nv_quota must be at least %llu\n",
-      2ULL * kNvwalSegmentSize);
+    return nvwal_raise_einval(
+      "Error: nv_quota must be at least of two segments\n");
   } else if (wal->segment_count_ > kNvwalMaxActiveSegments) {
     return nvwal_raise_einval_llu(
-      "Error: nv_quota must be at most %llu\n",
-      (uint64_t) kNvwalMaxActiveSegments * kNvwalSegmentSize);
+      "Error: nv_quota must be at most %llu segments\n",
+      (uint64_t) kNvwalMaxActiveSegments);
   }
 
   wal->durable_ = config->resuming_epoch_;
@@ -176,19 +190,20 @@ error_return:
 }
 
 nvwal_error_t init_fresh_nvram_segment(
-  struct NvwalContext * wal,
+  struct NvwalContext* wal,
   struct NvwalLogSegment* segment,
   nvwal_dsid_t dsid) {
   nvwal_error_t ret;
-  int nv_fd, disk_fd;
   char nv_path[kNvwalMaxPathLength];
-  void* nv_baseaddr;
 
   assert(dsid != kNvwalInvalidDsid);
   assert(wal->config_.nv_root_len_ + 32U < kNvwalMaxPathLength);
   ret = 0;
-  nv_fd = 0;
-  nv_baseaddr = 0;
+  segment->nv_fd_ = 0;
+  segment->nv_baseaddr_ = 0;
+
+  segment->parent_ = wal;
+  segment->dsid_ = dsid;
 
   nvwal_concat_sequence_filename(
     wal->config_.nv_root_,
@@ -196,34 +211,32 @@ nvwal_error_t init_fresh_nvram_segment(
     dsid,
     nv_path);
 
-  nv_fd = nvwal_open_best_effort_o_direct(
+  segment->nv_fd_ = nvwal_open_best_effort_o_direct(
     nv_path,
     O_CREAT | O_RDWR,
     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 
-  if (nv_fd == -1) {
+  if (segment->nv_fd_ == -1) {
     /** Failed to open/create the file! */
     ret = errno;
     goto error_return;
   }
 
-  assert(nv_fd);  /** open never returns 0 */
+  assert(segment->nv_fd_);  /** open never returns 0 */
 
-  /** posix_fallocate doesn't set errno, do it ourselves */
-  ret = posix_fallocate(nv_fd, 0, kNvwalSegmentSize);
-  if (ret) {
+  if (posix_fallocate(segment->nv_fd_, 0, wal->config_.segment_size_)) {
+    /** posix_fallocate doesn't set errno, do it ourselves */
+    ret = EINVAL;
     goto error_return;
   }
 
-  ftruncate(nv_fd, kNvwalSegmentSize);
-  if (errno) {
+  if (ftruncate(segment->nv_fd_, wal->config_.segment_size_)) {
     /** Failed to set the file length! */
     ret = errno;
     goto error_return;
   }
 
-  fsync(nv_fd);
-  if (errno) {
+  if (fsync(segment->nv_fd_)) {
     /** Failed to fsync! */
     ret = errno;
     goto error_return;
@@ -232,29 +245,25 @@ nvwal_error_t init_fresh_nvram_segment(
   /**
    * Don't bother (non-transparent) huge pages. Even libpmem doesn't try it.
    */
-  nv_baseaddr = mmap(0,
-                  kNvwalSegmentSize,
+  segment->nv_baseaddr_ = mmap(0,
+                  wal->config_.segment_size_,
                   PROT_READ | PROT_WRITE,
                   MAP_ANONYMOUS | MAP_PRIVATE,
-                  nv_fd,
+                  segment->nv_fd_,
                   0);
 
-  if (nv_baseaddr == MAP_FAILED) {
+  if (segment->nv_baseaddr_ == MAP_FAILED) {
     ret = errno;
     goto error_return;
   }
-  assert(nv_baseaddr);
+  assert(segment->nv_baseaddr_);
 
   /*
    * Even with fallocate we don't trust the metadata to be stable
    * enough for userspace durability. Actually write some bytes!
    */
-  memset(nv_baseaddr, 0, kNvwalSegmentSize);
-  msync(nv_baseaddr, kNvwalSegmentSize, MS_SYNC);
-
-  segment->dsid_ = dsid;
-  segment->nv_fd_ = nv_fd;
-  segment->nv_baseaddr_ = nv_baseaddr;
+  memset(segment->nv_baseaddr_, 0, wal->config_.segment_size_);
+  msync(segment->nv_baseaddr_, wal->config_.segment_size_, MS_SYNC);
   return 0;
 
 error_return:
@@ -309,7 +318,7 @@ nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
   ret = 0;
 
   if (segment->nv_baseaddr_ && segment->nv_baseaddr_ != MAP_FAILED) {
-    if (munmap(segment->nv_baseaddr_, kNvwalSegmentSize) == -1) {
+    if (munmap(segment->nv_baseaddr_, segment->parent_->config_.segment_size_) == -1) {
       ret = nvwal_stock_error_code(ret, errno);
     }
   }
@@ -321,13 +330,6 @@ nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
     }
   }
   segment->nv_fd_ = 0;
-
-  if (segment->disk_fd_ && segment->disk_fd_ != -1) {
-    if (close(segment->disk_fd_) == -1) {
-      ret = nvwal_stock_error_code(ret, errno);
-    }
-  }
-  segment->disk_fd_ = 0;
 
   memset(segment, 0, sizeof(struct NvwalLogSegment));
 
@@ -473,10 +475,11 @@ uint8_t nvwal_has_enough_writer_space(
 
 /**************************************************************************
  *
- *  Flusher
+ *  Flusher/Fsyncer
  *
  ***************************************************************************/
-nvwal_error_t process_one_writer(struct NvwalWriterContext * writer);
+nvwal_error_t process_one_writer(struct NvwalWriterContext* writer);
+nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment);
 
 nvwal_error_t nvwal_flusher_main(
   struct NvwalContext* wal) {
@@ -506,6 +509,11 @@ nvwal_error_t nvwal_flusher_main(
         * This needs to track which epochs are durable, what's on disk
         * etc. */
       //commit_metadata_updates(wal)
+
+      /** Promptly react when obvious. but no need to be atomic read. */
+      if (wal->flusher_stop_requested_) {
+        break;
+      }
     }
   }
   nvwal_atomic_store(&(wal->flusher_running_), 0);
@@ -514,216 +522,112 @@ nvwal_error_t nvwal_flusher_main(
 }
 
 nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
-  return 0;
-}
+  uint32_t cur_segment;
+  nvwal_error_t error_code;
+  struct NvwalLogSegment* segment;
 
+  error_code = 0;
+  /** whatever error checks here */
 
-nvwal_error_t process_one_writer(
-  struct NvwalWriterContext * writer) {
-  return 0;
-}
-
-#ifdef BLUH /** long way to go to get the following code compile. so far disable all of them */
-nvwal_error_t process_one_writer(
-  struct NvwalWriterContext * writer) {
-  struct NvwalContext* wal;
-  uint64_t buffer_size;
-
-  wal = writer->parent;
-  buffer_size = wal->config.writer_buffer_size;
-  nvwal_byte_t* complete = cur_writer->writer->complete;
-  nvwal_byte_t* copied = cur_writer->copied;
-  nvwal_byte_t* end = cur_writer->writer->buffer + size;
-  uint64_t len;
-
-  // If they are not equal, there's work to do since complete
-  // cannot be behind copied
-
-  while (writer->cb.complete != writer->copied) {
-    // Figure out how much we can copy linearly
-    total_length = circular_size(writer->copied, writer->complete, buffer_size);
-    nvseg_remaining = kNvwalSegmentSize - wal->nv_offset;
-    writer_length = end - copied;
-
-    len = MIN(MIN(total_length,nvseg_remaining),writer_length);
-
-    pmem_memcpy_nodrain(wal->cur_region+nv_offset, copied, len);
-
-    // Record some metadata here?
-
-    // Update pointers
-    copied += len;
-    assert(copied <= end);
-    if (copied == end) {
-      // wrap around
-      copied = cur_writer->writer->buffer;
+  nvwal_atomic_store(&(wal->fsyncer_running_), 1);
+  while (1) {
+    /** doesn't have to be seq_cst, and this code runs very frequently */
+    if (nvwal_atomic_load_acquire(&(wal->fsyncer_stop_requested_)) != 0) {
+      break;
     }
 
-    wal->nv_offset += len;
-
-    assert(wal->nv_offset <= kNvwalSegmentSize);
-    if (wal->nv_offset == kNvwalSegmentSize) {
-      NvwalLogSegment * cur_segment = wal->segment[wal->cur_seg_idx];
-      int next_seg_idx = wal->cur_seg_idx + 1 % wal->num_segments;
-      NvwalLogSegment * next_segment = wal->segment[next_seg_idx];
-
-      /* Transition current active segment to complete */
-      assert(cur_segment->state == SEG_ACTIVE);
-      cur_segment->state = SEG_COMPLETE;
-      submit_write(cur_segment);
-
-      /* Transition next segment to active */
-      if (next_segment->state != SEG_UNUSED) {
-          /* Should be at least submitted */
-          assert(next_segment->state >= SEG_SUBMITTED);
-          if (wal->flags & BG_FSYNC_THREAD) {
-              /* spin or sleep waiting for completion */
-          } else {
-              sync_backing_file(wal, next_segment);
-          }
-          assert(next_segment->state == SEG_UNUSED);
+    for (cur_segment = 0; cur_segment < wal->segment_count_; ++cur_segment) {
+      segment = wal->segments_ + cur_segment;
+      if (nvwal_atomic_load_acquire(&(segment->fsync_requested_))) {
+        error_code = sync_one_segment_to_disk(wal->segments_ + cur_segment);
+        if (error_code) {
+          break;
+        }
       }
 
-      assert(cur_segment->state >= SEG_SUBMITTED);
+      /** Promptly react when obvious. but no need to be atomic read. */
+      if (wal->fsyncer_stop_requested_) {
+        break;
+      }
+    }
+  }
+  nvwal_atomic_store(&(wal->fsyncer_running_), 0);
 
-      /* Ok, we're done with the old cur_segment */
-      cur_segment = next_segment;
+  return error_code;
+}
 
-      /* This isn't strictly necessary until we want to start
-        * flushing out data, but might as well be done here. The
-        * hard work can be done in batches, this function might
-        * just pull an already-open descriptor out of a pool. */
-      /* This seems to indicate that we will have one disk file
-       * per nvram segment
-       */ 
-      allocate_backing_file(wal, cur_segment);
+nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
+  nvwal_error_t ret;
+  int disk_fd;
+  char disk_path[kNvwalMaxPathLength];
+  uint64_t total_writen, written;
 
-      wal->cur_seg_idx = next_seg_idx;
-      wal->cur_region = cur_segment->nv_baseaddr;
-      wal->nv_offset = 0;
+  assert(segment->dsid_);
+  assert(!segment->fsync_completed_);
+  ret = 0;
+  disk_fd = 0;
+  total_writen = 0;
+  written = 0;
+  segment->fsync_error_ = 0;
+  nvwal_concat_sequence_filename(
+    segment->parent_->config_.disk_root_,
+    "nvwal_ds",
+    segment->dsid_,
+    disk_path);
 
-      cur_segment->state = SEG_ACTIVE;
+  disk_fd = nvwal_open_best_effort_o_direct(
+    disk_path,
+    O_CREAT | O_RDWR,
+    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+  assert(disk_fd);
+  if (disk_fd == -1) {
+    /** Probably permission issue? */
+    ret = errno;
+    goto error_return;
+  }
+
+  total_writen = 0;
+  /** Be aware of the case where write() doesn't finish in one call */
+  while (total_writen < segment->parent_->config_.segment_size_) {
+    written = write(
+      disk_fd,
+      segment->nv_baseaddr_ + total_writen,
+      segment->parent_->config_.segment_size_ - total_writen);
+    if (written == -1) {
+      /** Probably full disk? */
+      ret = errno;
+      goto error_return;
+    }
+    total_writen += written;
+
+    /** Is this fsyncher cancelled for some reason? */
+    if (segment->parent_->fsyncer_stop_requested_) {
+      ret = ETIMEDOUT;  /* Not sure this is appropriate.. */
+      goto error_return;
     }
   }
 
+  fsync(disk_fd);
+  close(disk_fd);
+  nvwal_open_and_fsync(segment->parent_->config_.disk_root_);
+
+  nvwal_atomic_store(&(segment->fsync_completed_), 1U);
+  return 0;
+
+error_return:
+  if (disk_fd && disk_fd != -1) {
+    close(disk_fd);
+  }
+  errno = ret;
+  segment->fsync_error_ = ret;
+  return ret;
+}
+
+
+nvwal_error_t process_one_writer(
+  struct NvwalWriterContext * writer) {
   return 0;
 }
-
-
-void * fsync_thread_main(void * arg) {
-    struct NvwalContext * wal = arg;
-
-    while(1) {
-        int i;
-        int found_work = 0;
-
-        for(i = 0; i < wal->num_segments; i++) {
-            if (wal->segments[i].state == SEG_SUBMITTED) {
-                sync_backing_file(wal, &wal->segments[i]);
-            }
-        }
-    }
-}
-
-void submit_write(
-  struct NvwalContext* wal,
-  struct NvwalLogSegment * seg) {
-  int bytes_written;
-
-  assert(seg->state == SEG_COMPLETE);
-  /* kick off write of old segment
-    * This should be wrapped up in some function,
-    * begin_segment_write or so. */
-
-  bytes_written = write(seg->disk_fd,
-                        seg->nv_baseaddr,
-                        kNvwalSegmentSize);
-
-  ASSERT_NO_ERROR(bytes_written != kNvwalSegmentSize);
-
-  seg->state = SEG_SUBMITTED;
-}
-
-
-void sync_backing_file(
-  struct NvwalContext * wal,
-  struct NvwalLogSegment* seg) {
-
-  assert(seg->state >= SEG_SUBMITTED);
-
-  /* kick off the fsync ourselves */
-  seg->state = SEG_SYNCING;
-  fsync(seg->disk_fd);
-
-  /* check file's dirfsync status, should be
-    * guaranteed in this model */
-  assert(seg->dir_synced);
-  seg->state = SEG_SYNCED;
-
-  /* Update durable epoch marker? */
-
-  //wal->durable = seg->latest - 2;
-
-  /* Notify anyone waiting on durable epoch? */
-
-  /* Clean up. */
-  close(seg->disk_fd);
-  seg->disk_fd = -1;
-  seg->state = SEG_UNUSED;
-  seg->seq = 0;
-  seg->disk_offset = 0; /* if we are bothering with this */
-  seg->dir_synced = false;
-}
-
-void allocate_backing_file(
-  struct NvwalContext * wal,
-  struct NvwalLogSegment * seg) {
-  uint64_t our_sequence = wal->log_sequence++;
-  int our_fd = -1;
-  int i = 0;
-  char filename[256];
-
-  if (our_sequence % PREALLOC_FILE_COUNT == 0) {
-    for (i = our_sequence; i < our_sequence + PREALLOC_FILE_COUNT; i++) {
-      int fd;
-
-      snprintf(filename, "log-segment-%lu", i);
-      fd = openat(wal->log_root_fd,
-                  filename,
-                  O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
-                  S_IRUSR|S_IWUSR);
-
-      ASSERT_FD_VALID(fd);
-      /* Now would be a good time to hint to the FS using
-        * fallocate or whatever. */
-
-      /* Clean up */
-
-      /* We should really just stash these fds in a pool */
-      close(fd);
-    }
-
-    /* Sync the directory, so that all these newly created (empty)
-      * files are visible.
-      * We may want to take care of this in the fsync thread instead
-      * and set the dir_synced flag on the segment descriptor */
-    fsync(wal->log_root_fd);
-    seg->dir_synced = true;
-  }
-
-  /* The file should already exist */
-  snprintf(filename, "log-segment-%lu", our_sequence);
-  our_fd = openat(wal->log_root_fd,
-                  filename,
-                  O_RDWR|O_TRUNC|O_APPEND);
-
-  ASSERT_FD_VALID(our_fd);
-
-  seg->disk_fd = our_fd;
-
-}
-
-#endif  /* BLUH */
 
 /**************************************************************************
  *

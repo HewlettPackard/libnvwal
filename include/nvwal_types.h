@@ -224,17 +224,17 @@ enum NvwalConstants {
   /**
    * @brief Largest number of log segments being actively written.
    * @details
-   * The number of active log segments is calculated from nv_quota / kNvwalSegmentSize.
+   * The number of active log segments is calculated from nv_quota / segment_size.
    * This constant defines the largest possible number for that.
    * If nv_quota demands more than this, nvwal_init() returns an error.
    */
   kNvwalMaxActiveSegments = 1024U,
 
   /**
-   * DESCRIBE ME.
+   * Used as the segment size if the user hasn't speficied any.
    * 32MB sounds like a good place to start?
    */
-  kNvwalSegmentSize = 1ULL << 25,
+  kNvwalDefaultSegmentSize = 1ULL << 25,
 
   /**
    * \li [oldest] : the oldest frame this writer \e might be using.
@@ -308,8 +308,6 @@ struct NvwalConfig {
    */
   nvwal_epoch_t resuming_epoch_;
 
-  uint32_t numa_domain_;
-
   /**
    * Number of log writer threads on this WAL instance.
    * This value must be kNvwalMaxWorkers or less.
@@ -317,25 +315,17 @@ struct NvwalConfig {
    */
   uint32_t writer_count_;
 
-  /** How big our nvram segments are */
-  uint64_t nv_seg_size_;
-  uint64_t nv_quota_;
+  /**
+   * Byte size of each segment, either on disk or NVDIMM.
+   * Must be a multiply of 512.
+   * If this is 0 (not set), we automatically set kNvwalDefaultSegmentSize.
+   */
+  uint64_t segment_size_;
 
-  /** Assumed to be the same as nv_seg_size for now */
-  uint64_t block_seg_size_;
+  uint64_t nv_quota_;
 
   /** Size of (volatile) buffer for each writer-thread. */
   uint64_t writer_buffer_size_;
-
-  /**
-    * How many on-disk log segments to create a time (empty files)
-    * This reduces the number of times we have to fsync() the directory
-    */
-  /*
-  uint32_t prealloc_file_count_;
-
-  uint64_t option_flags_;
-  */
 
   /**
    * Buffer of writer_buffer_size bytes for each writer-thread,
@@ -458,10 +448,13 @@ struct NvwalWriterContext {
  * copied by memcpy, and no need to free any thing \b except \b file \b descriptors and \b mmap.
  */
 struct NvwalLogSegment {
+  /** Back pointer to the parent WAL context. */
+  struct NvwalContext* parent_;
+
   /**
    * mmap-ed virtual address for this segment on NVDIMM.
-   * It is never MAP_FAILED. We treat that case as soon as we invoke mmap.
-   * When it is non-null, libnvwal is responsible to unmap it durinng uninit.
+   * Both MAP_FAILED and NULL mean an invalid VA.
+   * When it is a valid VA, libnvwal is responsible to unmap it during uninit.
    */
   nvwal_byte_t* nv_baseaddr_;
 
@@ -494,17 +487,15 @@ struct NvwalLogSegment {
 
   /**
    * File descriptor on NVDIMM.
-   * It is never -1 (open has failed). We treat that case as soon as we invoke open.
-   * When it is non-zero, libnvwal is responsible to close it durinng uninit.
+   * Both -1 and 0 mean an invalid descriptor.
+   * When it is a valid FD, libnvwal is responsible to close it during uninit.
    */
   int64_t nv_fd_;
-  /**
-   * File descriptor on disk.
-   * It is never -1 (open has failed). We treat that case as soon as we invoke open.
-   * Set/read only by fsyncher.
-   * When it is non-zero, fsyncher is responsible to close it durinng uninit.
-   */
+  /*
+  we don't retain FD on disk. it's a local variable opened/used, then immediately
+  closed by the fsyncer. simpler!
   int64_t disk_fd_;
+  */
 };
 
 /**
