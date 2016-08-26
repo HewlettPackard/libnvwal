@@ -189,10 +189,10 @@ nvwal_error_t nvwal_reader_uninit(
  *
  */
 nvwal_error_t get_epoch(
-  NvwalReaderContext* reader,
+  struct NvwalReaderContext* reader,
   nvwal_epoch_t const epoch, 
   char ** buf, 
-  size_t * len);
+  uint64_t* len);
 
 #ifdef __cplusplus
 }

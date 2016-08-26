@@ -249,7 +249,7 @@ enum NvwalConstants {
   /**
    * Number of epochs to prefetch when calling get_next_epoch()
    */
-  kNvwalPrefetchLength = 5;
+  kNvwalPrefetchLength = 5,
 
   /**
    * @brief Default page size in bytes for meta-data store.
@@ -532,7 +532,7 @@ struct NvwalMdsContext {
 struct NvwalReaderContext {
   nvwal_epoch_t prev_epoch_; /* The epoch most recently requested and fetched */
   nvwal_epoch_t tail_epoch_; /* The largest epoch number we've prefetched */
-  bool fetch_complete_;
+  uint8_t fetch_complete_;
   uint64_t seg_id_; /* The last segment we tried to mmap */
 };
 
