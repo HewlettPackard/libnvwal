@@ -184,6 +184,7 @@ typedef int8_t    nvwal_byte_t;
  */
 typedef uint32_t  nvwal_dsid_t;
 
+
 enum NvwalConstants {
   /**
   * This value of epoch is reserved for null/invalid/etc.
@@ -244,6 +245,26 @@ enum NvwalConstants {
    * safe to reset [oldest + 4]. This is why we have 5 frames.
    */
   kNvwalEpochFrameCount = 5,
+
+  /**
+   * Number of epochs to prefetch when calling get_next_epoch()
+   */
+  kNvwalPrefetchLength = 5;
+
+  /**
+   * @brief Default page size in bytes for meta-data store.
+   * 
+   */
+  kNvwalMdsPageSize = 1ULL << 20,
+
+
+  /**
+   * @brief Largest number of pages files being actively written.
+   * 
+   * @note Currently, we support a single page file so we don't 
+   * expect to have more than one active page file.
+   */
+  kNvwalMdsMaxActivePagefiles = 1U,
 };
 
 /**
@@ -321,6 +342,9 @@ struct NvwalConfig {
    * is null, nvwal_init() will return an error.
    */
   nvwal_byte_t* writer_buffers_[kNvwalMaxWorkers];
+
+  /** Size of metadata store buffer page */
+  uint64_t mds_page_size_;
 };
 
 /**
@@ -481,6 +505,41 @@ struct NvwalLogSegment {
 };
 
 /**
+ * @brief Represents a context of a meta-data-store buffer-manager instance.
+ */
+struct NvwalMdsBufferManagerContext {
+  int root_fd_;
+};
+
+/**
+ * @brief Represents a context of a meta-data store instance.
+ */
+struct NvwalMdsContext {
+  /** Runtime configuration parameters */
+  struct NvwalConfig config_;
+
+  /** File descriptor to the disk directory where we keep metadata page files */
+  int block_root_fd_;          
+
+  struct PageFile* active_pagefiles_[kNvwalMdsMaxActivePagefiles];
+
+  /** Buffer manager context */
+  struct NvwalMdsBufferManagerContext bfmgr_;   
+};
+
+/**
+ * @brief Represents the context of the reading API for retrieving prior
+ * epoch data. Must be initialized/uninitialized via nvwal_reader_init()
+ * and nvwal_reader_uninit().
+ */
+struct NvwalReaderContext {
+  nvwal_epoch_t prev_epoch_; /* The epoch most recently requested and fetched */
+  nvwal_epoch_t tail_epoch_; /* The largest epoch number we've prefetched */
+  bool fetch_complete_;
+  uint64_t seg_id_; /* The last segment we tried to mmap */
+};
+
+/**
  * @brief Represents a context of \b one stream of write-ahead-log placed in
  * NVDIMM and secondary device.
  * @details
@@ -533,6 +592,7 @@ struct NvwalContext {
    * Set when the flusher thread started running.
    */
   uint8_t flusher_running_;
+
   /**
    * Used to inform the fsyncer that nvwal_uninit() was invoked.
    */
@@ -541,6 +601,11 @@ struct NvwalContext {
    * Set when the fsyncer thread started running.
    */
   uint8_t fsyncer_running_;
+
+  /**
+   * Metadata store context 
+   */
+  struct NvwalMdsContext mds_;
 };
 
 /** @} */
