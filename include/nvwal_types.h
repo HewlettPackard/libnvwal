@@ -552,8 +552,22 @@ struct NvwalReaderContext {
  * it's very unlikely to have this long-living object on stack anyways (unit test?)..
  */
 struct NvwalContext {
-  nvwal_epoch_t durable_;
-  nvwal_epoch_t latest_;
+  /**
+   * DE of this WAL instance.
+   * All logs in this epoch are durable at least on NVDIMM.
+   */
+  nvwal_epoch_t durable_epoch_;
+  /**
+   * SE of this WAL instance.
+   * Writers won't submit logs in this epoch or earlier.
+   * @invariant stable_ == durable_ || stable_ == durable_ + 1
+   */
+  nvwal_epoch_t stable_epoch_;
+  /**
+   * NE of this WAL instance.
+   * logs in this epoch can be written to files.
+   */
+  nvwal_epoch_t next_epoch_;
 
   /**
    * All static configurations given by the user on initializing this WAL instance.
