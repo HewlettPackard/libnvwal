@@ -259,7 +259,7 @@ enum NvwalConstants {
 
 
   /**
-   * @brief Largest number of pages files being actively written.
+   * @brief Largest number of page-files being actively written.
    */
   kNvwalMdsMaxActivePagefiles = 1U,
 

@@ -77,7 +77,7 @@
  */
 
 /*
-  Code should be NUMA aware
+  TODO: Code should be NUMA aware
  */
 
 
@@ -88,62 +88,36 @@
 typedef uint64_t page_no_t;
 typedef uint64_t file_no_t;
 
-/*/  
+/**  
  * @brief Page-file descriptor structure.
  */
 struct PageFile {
   file_no_t file_no_;
-  int       refcnt_;
   int       fd_;
 };
 
 /**
- * @brief Represents a buffer frame descriptor. 
- * 
- * @details 
- * The frame can be either persistent (mapped to NVRAM) or 
- * volatile (mapped to DRAM).
+ * @brief Represents a descriptor of a buffer frame mapped on NVRAM. 
  */
 struct NvwalMdsBuffer {
   struct PageFile* file_;
-  page_no_t        page_no;
-  void*            baseaddr;
-  int              writable;
+  page_no_t        page_no_;
+  void*            baseaddr_;
 };
 
 
 /**
- * @brief Returns page file descriptor of an active/open file.
+ * @brief Initializes the buffer manager of the meta-data store.
  *
  * @details
- * If the file is not open/active then the function returns null.
- * 
- * @note The current implementation relies on simply scanning an 
- * array so it is obviously not efficient for a large number of 
- * active files. 
+ * As part of the initialization, the buffer manager remaps any NVRAM
+ * buffers. However, the user is still responsible to assign NVRAM
+ * buffers to the proper page file based on the recovery protocol
+ * followed by the user. 
  */
-static struct PageFile* mds_io_lookup_file_desc(
-  struct NvwalMdsContext* mds, 
-  file_no_t file_no);
-
-/**
- * @brief Adds page file descriptor to table of active/open files.
- * 
- * @details
- * Assumes the caller has already checked that the page file descriptor
- * does not exist in the table.
- */
-static nvwal_error_t mds_io_add_file_desc(
-  struct NvwalMdsContext* mds,
-  struct PageFile* file);
-
-/**
- * @brief Removes page file descriptor from table of known active/open files.
- */
-static void mds_io_remove_file_desc(
-  struct NvwalMdsContext* mds,
-  struct PageFile* file);
-
+static nvwal_error_t mds_bufmgr_init(
+  const struct NvwalConfig* config, 
+  struct NvwalMdsBufferManagerContext* bufmgr);
 
 
 int strcat_s(char *dest, size_t destsz, const char* src)
@@ -156,64 +130,8 @@ int strcat_s(char *dest, size_t destsz, const char* src)
 }
 
 /******************************************************************************
- * Meta-data-store I/O helper methods
+ * Meta-data store I/O subsystem functions
  *****************************************************************************/
-
-struct PageFile* mds_io_lookup_file_desc(
-  struct NvwalMdsContext* mds, 
-  file_no_t file_no)
-{
-  int i;
-  struct PageFile* found_pf = NULL;
-
-  for (i=0; i < kNvwalMdsMaxActivePagefiles; i++) {
-    struct PageFile* pf = mds->active_files_[i];
-    if (pf->file_no_ == file_no) {
-      found_pf = pf;
-      break;
-    }
-  }
-  return found_pf;
-}
-
-
-nvwal_error_t mds_io_add_file_desc(
-  struct NvwalMdsContext* mds,
-  struct PageFile* file)
-{
-  int i;
-  int empty_slot = -1;
-
-  for (i=0; i < kNvwalMdsMaxActivePagefiles; i++) {
-    struct PageFile* pf = mds->active_files_[i];
-    if (!pf) {
-      empty_slot = i;
-      break;
-    }
-  }
-  if (empty_slot < 0) {
-    return nvwal_raise_einval("Error: no free space in table of active files\n");
-  }
-  mds->active_files_[empty_slot] = file;
-  return 0; 
-}
-
-
-void mds_io_remove_file_desc(
-  struct NvwalMdsContext* mds,
-  struct PageFile* file)
-{
-  int i;
-
-  for (i=0; i < kNvwalMdsMaxActivePagefiles; i++) {
-    struct PageFile* pf = mds->active_files_[i];
-    if (pf->file_no_ == file->file_no_) {
-      mds->active_files_[i] = NULL;
-      break;
-    }
-  }
-}
-
 
 /**
  * @brief Allocates and initializes a page-file descriptor.
@@ -230,22 +148,9 @@ static struct PageFile* alloc_page_file_desc(file_no_t file_no, int fd)
   }
 
   file->file_no_ = file_no;
-  file->refcnt_ = 1;
   file->fd_ = fd;
   
   return file;
-}
-
-
-static nvwal_error_t mds_io_init(struct NvwalMdsContext* mds)
-{
-  int i;
-
-  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    mds->active_files_[i] = NULL;   
-  }
-
-  return 0;
 }
 
 /**
@@ -262,13 +167,6 @@ static nvwal_error_t mds_io_open_file(
   int fd = -1;
   char pathname[kNvwalMaxPathLength];
   
-  if ((*file = mds_io_lookup_file_desc(mds, file_no))) {
-    assert((*file)->file_no_ == file_no);
-    assert((*file)->fd_ > -1);
-    (*file)->refcnt_++;
-    return 0;
-  }
-
   nvwal_concat_sequence_filename(
     mds->config_.disk_root_,
     MDS_PAGE_FILE_PREFIX,
@@ -285,9 +183,8 @@ static nvwal_error_t mds_io_open_file(
 
   *file = alloc_page_file_desc(file_no, fd);
   assert(*file);
-  ret = mds_io_add_file_desc(mds, *file);
 
-  return ret;
+  return 0;
  
 error_return:
   errno = ret;
@@ -333,7 +230,6 @@ static nvwal_error_t mds_io_create_file(
  
   *file = alloc_page_file_desc(file_no, fd);
   assert(*file);
-  ret = mds_io_add_file_desc(mds, *file);
 
   return ret;
  
@@ -342,33 +238,82 @@ error_return:
   return ret;
 }
 
+
 /**
  * @brief Closes a page file.
- *
- * @details
- * This function only closes the file if no other File descriptor exist that 
- * access the same file.
  */
 static void mds_io_close_file(
   struct NvwalMdsContext* mds,
   struct PageFile* file)
 {
-  file->refcnt_--;
-  if (file->refcnt_ > 0) {
-    return;
-  }
   close(file->fd_);
-  mds_io_remove_file_desc(mds, file);
   free(file);  
 }
 
+
+/**
+ * @brief Initializes the I/O subsystem of the meta-data store.
+ * 
+ * @details
+ * Opens metadata page files. If the page files do not exist, it creates them. 
+ */
+static nvwal_error_t mds_io_init(struct NvwalMdsContext* mds)
+{
+  int i;
+  nvwal_error_t ret;
+  struct PageFile* pf;
+
+  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    ret = mds_io_open_file(mds, i, &pf);
+    if (ret == EACCES) {
+      /* page file does not exist; create it */
+      ret = mds_io_create_file(mds, i, &pf);
+      if (!ret) {
+        goto error_return;
+      }
+    }
+    mds->active_files_[i] = pf;
+  }
+
+  return 0;
+
+error_return:
+  errno = ret;
+  return ret;
+}
+
+
+/**
+ * @brief Unitializes the I/O subsystem of the meta-data store.
+ */
+static nvwal_error_t mds_io_uninit(struct NvwalMdsContext* mds)
+{
+  int i;
+
+  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    assert(mds->active_files_[i]);
+    mds_io_close_file(mds, mds->active_files_[i]);   
+    mds->active_files_[i] = NULL;
+  }
+  return 0;
+}
+
+
+static nvwal_error_t mds_io_append_page(
+  struct PageFile* file,
+  page_no_t page_no,
+  const void* buf)
+{
+  /* TODO: implement me */
+  return 0; 
+}
 
 
 /******************************************************************************
  * Meta-data-store buffer-manager helper methods
  *****************************************************************************/
 
-nvwal_error_t create_nvram_buffer_file(
+static nvwal_error_t create_nvram_buffer_file(
   struct NvwalMdsBufferManagerContext* bufmgr,
   int buffer_id)
 {
@@ -417,7 +362,7 @@ error_return:
 }
 
 
-nvwal_error_t map_nvram_buffer_file(
+static nvwal_error_t map_nvram_buffer_file(
   struct NvwalMdsBufferManagerContext* bufmgr,
   int buffer_id,
   void** nv_baseaddr) 
@@ -517,9 +462,8 @@ static nvwal_error_t mds_bufmgr_init_nvram_buffer(
   }
   
   (*buffer)->file_ = NULL;
-  (*buffer)->page_no = -1;
-  (*buffer)->baseaddr = baseaddr;
-  (*buffer)->writable = 1;
+  (*buffer)->page_no_ = -1;
+  (*buffer)->baseaddr_ = baseaddr;
 
   return 0;
 
@@ -561,14 +505,41 @@ nvwal_error_t mds_bufmgr_init(
   memcpy(&bufmgr->config_, config, sizeof(*config));
 
   mds_bufmgr_init_nvram_buffers(bufmgr);
+
   return 0;
+}
+
+
+nvwal_error_t mds_bufmgr_uninit(
+  struct NvwalMdsBufferManagerContext* bufmgr)
+{
+  nvwal_error_t ret;
+  int i;
+  struct NvwalMdsBuffer* buffer;
+
+  for (i=0; i<kNvwalMdsMaxBufferPages; i++) {
+    buffer = bufmgr->buffers_[i];
+    ret = unmap_nvram_buffer_file(bufmgr, buffer->baseaddr_);
+    if (!ret) {
+      goto error_return;
+    }
+    free(buffer);
+    bufmgr->buffers_[i] = NULL;
+  }
+  return 0;
+
+error_return:
+  errno = ret;
+  return ret;
 }
 
 
 void  mds_bufmgr_lookup_page()
 {
+  /* TODO: implementn me */
 
 }
+
 
 nvwal_error_t mds_bufmgr_alloc_buffer(
   struct NvwalMdsBufferManagerContext* bufmgr)
@@ -578,26 +549,28 @@ nvwal_error_t mds_bufmgr_alloc_buffer(
 }
 
 
-
-
-
-void mds_bufmgr_read_page(
+nvwal_error_t mds_bufmgr_read_page(
   struct NvwalMdsBufferManagerContext* bufmgr, 
   struct PageFile* file, 
   page_no_t page_no, 
   struct NvwalMdsBuffer** buffer) 
 {
   /* TODO: implement me */
+  return 0;
 }
 
 
-void mds_bufmgr_alloc_page(
+nvwal_error_t mds_bufmgr_alloc_page(
   struct NvwalMdsBufferManagerContext* bufmgr, 
   struct PageFile* file, 
   page_no_t page_no, 
-  struct NvwalMdsBuffer* buffer) 
+  struct NvwalMdsBuffer** buffer) 
 {
   /* TODO: implement me */
+  /*
+     allocate a page in the file by doing truncate
+   */
+  return 0;
 }
 
 
@@ -626,7 +599,13 @@ nvwal_error_t mds_init(
 
 nvwal_error_t mds_uninit(struct NvwalContext* wal)
 {
-  /* TODO: implement me */
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
+
+  mds_bufmgr_uninit(bufmgr);
+  mds_io_uninit(mds);
+
+  /* TODO: close active page files */
   return 0;
 }
 
@@ -648,14 +627,26 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
 }
 
 /**
- * @brief Return the file number of the page file storing metadata for 
+ * @brief Returns the maximum number of epochs per page
+ */
+static inline int max_epochs_per_page(struct NvwalMdsContext* mds)
+{ 
+  return mds->config_.mds_page_size_ / sizeof(struct MdsEpochMetadata);
+}
+
+
+/**
+ * @brief Returns the file number of the page file storing metadata for 
  * epoch \a epoch_id.
  * 
- * @note Currently, we support a single page file so we always return 0. 
+ * @details
+ * To increase write parallelism to the disk, we maintain multiple page files
+ * and stripe epoch pages evenly across page files.
  */
-file_no_t epoch_id_to_file_no(struct NvwalMdsContext* wal, nvwal_epoch_t epoch_id)
+file_no_t epoch_id_to_file_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
-  return 0;
+  uint64_t page_offset = epoch_id / max_epochs_per_page(mds);
+  return page_offset % kNvwalMdsMaxActivePagefiles;
 }
 
 
@@ -670,24 +661,30 @@ file_no_t epoch_id_to_file_no(struct NvwalMdsContext* wal, nvwal_epoch_t epoch_i
  */
 struct PageFile* epoch_id_to_file(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
+/*
+  nvwal_error_t ret;
   file_no_t fno = epoch_id_to_file_no(mds, epoch_id);
-  struct PageFile* pf = mds->active_files_[fno];
+  struct PageFile* pf = mds_io_lookup_file_desc(mds, fno);
   if (!pf) {
-    //open_file(mds, fno, &pf);
+    ret = mds_io_open_file(mds, fno, &pf);
+    if (!ret) {
+      pf = NULL;
+    }
   }
-  return NULL; 
+  return pf; 
+*/
 }
 
 
 /**
  * @brief Return the page number of the page storing metadata for 
  * epoch \a epoch_id.
- * 
- * @note Currently, we support a single page file.
+ *
+ * @note Currently, we support a single page file that grows infinitely. 
  */
 page_no_t epoch_id_to_page_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
-  return epoch_id / (mds->config_.mds_page_size_ / sizeof(struct MdsEpochMetadata));  
+  return epoch_id / ((mds->config_.mds_page_size_) / sizeof(struct MdsEpochMetadata));  
 }
 
 
@@ -697,22 +694,33 @@ void mds_read_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id, struct 
 }
 
 
-/*
- * QUESTIONS:
- * - does user explicitly provide the epoch_id to write metadata for?
- * - is epoch_metadata opaque to the user or do we open up the struct?
- * - do we support random write or just append?
- */
-nvwal_error_t mds_write_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id, struct MdsEpochMetadata* epoch_metadata)
+nvwal_error_t mds_write_epoch(
+  struct NvwalMdsContext* mds, 
+  struct MdsEpochMetadata* epoch_metadata)
 {
+  nvwal_error_t ret;
+  struct NvwalMdsBuffer* buffer;
+
+  nvwal_epoch_t epoch_id = epoch_metadata->epoch_id_;
+
+  struct PageFile* file = epoch_id_to_file(mds, epoch_id);
+  page_no_t page_no = epoch_id_to_page_no(mds, epoch_id);
+
+  ret = mds_bufmgr_read_page(&mds->bufmgr_, file, page_no, &buffer);
+  if (ret != 0) {
+    ret = mds_bufmgr_alloc_page(&mds->bufmgr_, file, page_no, &buffer);
+    if (ret != 0) {
+      goto error_return;
+    }
+  }
   /*
-    epoch_id -> <file, page_no>
-    mds_bufmgr_read_page: locate buffer frame holding  <file, page_no>
-    if no buffer, then alloc buffer 
-    now we have a buffer, write epoch record to nvram buffer, sync the nvram buffer. 
+    TODO: now we have a buffer, write epoch record to nvram buffer, sync the nvram buffer. 
   */
-  /* TODO: implement me */
   
 
   return 0;
+
+error_return:
+  errno = ret;
+  return ret;
 }

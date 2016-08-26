@@ -39,9 +39,9 @@
  * @param[out] wal nvwal context 
  *
  * @notes
- * This function just does some basic initialization. It does not restore 
+ * This function just does some basic initialization. It does not recover 
  * any durable state. Instead, the user has to call a separate recover 
- * function to restore such state.
+ * function to recover such state.
  *
  */
 nvwal_error_t mds_init(
@@ -50,11 +50,37 @@ nvwal_error_t mds_init(
 
 
 /**
+ * @brief Performs recovery of the metadata store. 
+ *
+ * @param[in] wal nvwal context 
+ * 
+ * @details 
+ * Restores epoch metadata to the latest consistent durable state.
+ */
+nvwal_error_t mds_recover(struct NvwalContext* wal);
+
+
+/**
  * @brief Uninitializes the metadata store.
  *
  * @param[in] wal nvwal context 
  */
 nvwal_error_t mds_uninit(struct NvwalContext* wal);
+
+
+/**
+ * @brief Writes epoch \a epoch_metadata.
+ *
+ * @param[in] mds metadata store context
+ * @param[in] epoch_metadata epoch
+ * 
+ * @details
+ * When the function returns successfully, the epoch metadata is 
+ * guaranteed to be durable.
+ */
+nvwal_error_t mds_write_epoch(
+  struct NvwalMdsContext* mds, 
+  struct MdsEpochMetadata* epoch_metadata);
 
 
 /** @} */
