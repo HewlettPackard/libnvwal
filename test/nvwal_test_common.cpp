@@ -50,27 +50,28 @@ nvwal_error_t TestContext::init_all() {
     return ENOENT;
   }
 
-  wal_instances_.resize(wal_count_);
+  wal_resources_.resize(wal_count_);
 
   // TODO(Hideaki) : following must be based on sizing_
   const uint64_t kWriterBufferSize = 1ULL << 12;
   const uint16_t kWriterCount = 2;
   const uint32_t kSegSize = 1U << 12;
   const uint64_t kNvQuota = 1ULL << 16;
-
-  uint64_t total_buffer_size = wal_count_ * kWriterBufferSize * kWriterCount;
-  writer_buffer_memory_.reset(new char[total_buffer_size]);
-  if (writer_buffer_memory_.get() == nullptr) {
-    std::cerr << "TestContext::init_all() : Fatal! failed to allocate writer buffers"
-       << total_buffer_size << " bytes. Check memory availability." << std::endl;
-    return ENOMEM;
-  }
-
-
-  nvwal_byte_t* cur_buffer_pos = reinterpret_cast<nvwal_byte_t*>(writer_buffer_memory_.get());
   for (int w = 0; w < wal_count_; ++w) {
-    auto* wal = get_wal(w);
+    auto* resource = get_resource(w);
+    auto* wal = &resource->wal_instance_;
     std::memset(wal, 0, sizeof(*wal));
+
+    resource->writer_buffers_.resize(kWriterCount);
+    for (uint16_t wr = 0; wr < kWriterCount; ++wr) {
+      resource->writer_buffers_[wr].reset(new nvwal_byte_t[kWriterBufferSize]);
+      if (resource->writer_buffers_[wr].get() == nullptr) {
+        std::cerr << "TestContext::init_all() : Fatal! failed to allocate writer buffers"
+          << kWriterBufferSize << " bytes. Check memory availability." << std::endl;
+        return ENOMEM;
+      }
+      std::memset(resource->writer_buffers_[wr].get(), 0, kWriterBufferSize);
+    }
 
     std::string w_str = std::to_string(w);
     boost::filesystem::path wal_root = root_path;
@@ -90,8 +91,7 @@ nvwal_error_t TestContext::init_all() {
     config.segment_size_ = kSegSize;
     config.writer_buffer_size_ = kWriterBufferSize;
     for (uint16_t wr = 0; wr < kWriterCount; ++wr) {
-      config.writer_buffers_[wr] = cur_buffer_pos;
-      cur_buffer_pos += kWriterBufferSize;
+      config.writer_buffers_[wr] =  resource->writer_buffers_[wr].get();
     }
     config.writer_count_ = kWriterCount;
 
@@ -101,6 +101,9 @@ nvwal_error_t TestContext::init_all() {
         << w << ". errno=" << ret << std::endl;
       return ret;
     }
+
+    resource->launch_flusher();
+    resource->launch_fsyncer();
   }
 
   return 0;
@@ -109,17 +112,54 @@ nvwal_error_t TestContext::init_all() {
 nvwal_error_t TestContext::uninit_all() {
   nvwal_error_t last_error = 0;
   for (int w = 0; w < wal_count_; ++w) {
-    auto* wal = get_wal(w);
+    auto* resource = get_resource(w);
     // Here, we assume nvwal_uninit is idempotent.
-    auto ret = nvwal_uninit(wal);
-    if (last_error) {
+    auto ret = nvwal_uninit(&resource->wal_instance_);
+    if (ret) {
       last_error = ret;
+    }
+    resource->join_flusher();
+    resource->join_fsyncer();
+    if (resource->flusher_exit_code_) {
+      last_error = resource->flusher_exit_code_;
+    }
+    if (resource->fsyncer_exit_code_) {
+      last_error = resource->fsyncer_exit_code_;
     }
   }
   boost::filesystem::remove_all(unique_root_path_);
-  writer_buffer_memory_.reset(nullptr);
   return last_error;
 }
+
+
+void WalResource::launch_flusher() {
+  flusher_ = std::move(std::thread(
+    [this](){
+      this->flusher_exit_code_ = nvwal_flusher_main(&this->wal_instance_);
+    }
+  ));
+}
+
+void WalResource::launch_fsyncer() {
+  fsyncer_ = std::move(std::thread(
+    [this](){
+      this->fsyncer_exit_code_ = nvwal_fsync_main(&this->wal_instance_);
+    }
+  ));
+}
+
+void WalResource::join_flusher() {
+  if (flusher_.joinable()) {
+    flusher_.join();
+  }
+}
+
+void WalResource::join_fsyncer() {
+  if (fsyncer_.joinable()) {
+    fsyncer_.join();
+  }
+}
+
 
 std::string TestContext::get_random_name() {
   // In this unittest suite, we are lazy.
