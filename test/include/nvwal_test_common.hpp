@@ -20,12 +20,33 @@
 
 #include <string>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "nvwal_fwd.h"
 #include "nvwal_types.h"
 
 namespace nvwaltest {
+
+struct WalResource {
+  WalResource() : flusher_exit_code_(0), fsyncer_exit_code_(0) {}
+
+  NvwalContext wal_instance_;
+
+  std::thread flusher_;
+  std::thread fsyncer_;
+
+  nvwal_error_t flusher_exit_code_;
+  nvwal_error_t fsyncer_exit_code_;
+
+  void launch_flusher();
+  void launch_fsyncer();
+
+  void join_flusher();
+  void join_fsyncer();
+
+  std::vector< std::unique_ptr< nvwal_byte_t[] > > writer_buffers_;
+};
 
 /**
  * Each unit test holds one TestContext throughout the test execution.
@@ -69,7 +90,8 @@ class TestContext {
   nvwal_error_t uninit_all();
 
   int get_wal_count() const { return wal_count_; }
-  NvwalContext* get_wal(int wal_id) { return &wal_instances_[wal_id]; }
+  WalResource* get_resource(int wal_id) { return &wal_resources_[wal_id]; }
+  NvwalContext* get_wal(int wal_id) { return &wal_resources_[wal_id].wal_instance_; }
 
  private:
   TestContext(const TestContext&) = delete;
@@ -85,12 +107,7 @@ class TestContext {
   const int wal_count_;
   const InstanceSize sizing_;
   std::string unique_root_path_;
-  std::vector< NvwalContext > wal_instances_;
-
-  /**
-   * Writer's buffers point to pieces of this.
-   */
-  std::unique_ptr< char[] > writer_buffer_memory_;
+  std::vector< WalResource > wal_resources_;
 };
 
 /**

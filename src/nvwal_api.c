@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,43 +56,45 @@ void remove_trailing_slash(char* path, uint16_t* len) {
 }
 
 nvwal_error_t nvwal_init(
-  const struct NvwalConfig* config,
+  const struct NvwalConfig* given_config,
   struct NvwalContext* wal) {
   uint32_t i;
   nvwal_error_t ret;
   struct NvwalWriterContext* writer;
+  struct NvwalConfig* config;
   nvwal_dsid_t resuming_dsid;
 
   /** otherwise the following memzero will also reset config, ouch */
-  if (config == &(wal->config_)) {
+  config = &(wal->config_);
+  if (config == given_config) {
     return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
   }
 
   memset(wal, 0, sizeof(*wal));
-  memcpy(&wal->config_, config, sizeof(*config));
+  memcpy(config, given_config, sizeof(*config));
 
   /** Check/adjust nv_root/disk_root */
-  wal->config_.nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
-  wal->config_.disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
-  if (wal->config_.nv_root_len_ <= 1U) {
+  config->nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
+  config->disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
+  if (config->nv_root_len_ <= 1U) {
     return nvwal_raise_einval("Error: nv_root must be a valid full path\n");
-  } else if (wal->config_.nv_root_len_ >= kNvwalMaxPathLength) {
+  } else if (config->nv_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: nv_root must be null terminated\n");
-  } else if (wal->config_.nv_root_len_ >= kNvwalMaxFolderPathLength) {
+  } else if (config->nv_root_len_ >= kNvwalMaxFolderPathLength) {
     return nvwal_raise_einval_llu(
       "Error: nv_root must be at most %llu characters\n",
       kNvwalMaxFolderPathLength);
-  } else if (wal->config_.disk_root_len_ <= 1U) {
+  } else if (config->disk_root_len_ <= 1U) {
     return nvwal_raise_einval("Error: disk_root must be a valid full path\n");
-  } else if (wal->config_.disk_root_len_ >= kNvwalMaxPathLength) {
+  } else if (config->disk_root_len_ >= kNvwalMaxPathLength) {
     return nvwal_raise_einval("Error: disk_root_ must be null terminated\n");
-  } else if (wal->config_.disk_root_len_ >= kNvwalMaxFolderPathLength) {
+  } else if (config->disk_root_len_ >= kNvwalMaxFolderPathLength) {
     return nvwal_raise_einval_llu(
       "Error: disk_root must be at most %llu characters\n",
       kNvwalMaxFolderPathLength);
   }
-  remove_trailing_slash(wal->config_.nv_root_, &wal->config_.nv_root_len_);
-  remove_trailing_slash(wal->config_.disk_root_, &wal->config_.disk_root_len_);
+  remove_trailing_slash(config->nv_root_, &config->nv_root_len_);
+  remove_trailing_slash(config->disk_root_, &config->disk_root_len_);
 
   /** Check writer_count, writer_buffer_size, writer_buffers */
   if (config->writer_count_ == 0 || config->writer_count_ > kNvwalMaxWorkers) {
@@ -111,15 +114,15 @@ nvwal_error_t nvwal_init(
     }
   }
 
-  if (wal->config_.segment_size_ % 512 != 0) {
+  if (config->segment_size_ % 512 != 0) {
     return nvwal_raise_einval(
       "Error: segment_size_ must be a multiply of 512\n");
   }
-  if (wal->config_.segment_size_ == 0) {
-    wal->config_.segment_size_ = kNvwalDefaultSegmentSize;
+  if (config->segment_size_ == 0) {
+    config->segment_size_ = kNvwalDefaultSegmentSize;
   }
-  wal->segment_count_ = wal->config_.nv_quota_ / wal->config_.segment_size_;
-  if (wal->config_.nv_quota_ % wal->config_.segment_size_ != 0) {
+  wal->segment_count_ = config->nv_quota_ / config->segment_size_;
+  if (config->nv_quota_ % config->segment_size_ != 0) {
     return nvwal_raise_einval(
       "Error: nv_quota must be a multiply of segment size\n");
   } else if (wal->segment_count_ < 2U) {
@@ -131,8 +134,12 @@ nvwal_error_t nvwal_init(
       (uint64_t) kNvwalMaxActiveSegments);
   }
 
-  wal->durable_ = config->resuming_epoch_;
-  wal->latest_ = config->resuming_epoch_;
+  if (config->resuming_epoch_ == kNvwalInvalidEpoch) {
+    config->resuming_epoch_ = 1;
+  }
+  wal->durable_epoch_ = config->resuming_epoch_;
+  wal->stable_epoch_ = config->resuming_epoch_;
+  wal->next_epoch_ = nvwal_increment_epoch(config->resuming_epoch_);
 
   /** TODO we should retrieve from MDS in restart case */
   for (i = 0; i < config->writer_count_; ++i) {
@@ -174,11 +181,11 @@ nvwal_error_t nvwal_init(
   }
 
   /* Created files on NVDIMM/Disk, fsync parent directory */
-  ret = nvwal_open_and_fsync(wal->config_.nv_root_);
+  ret = nvwal_open_and_fsync(config->nv_root_);
   if (ret) {
     goto error_return;
   }
-  ret = nvwal_open_and_fsync(wal->config_.disk_root_);
+  ret = nvwal_open_and_fsync(config->disk_root_);
   if (ret) {
     goto error_return;
   }
@@ -290,22 +297,15 @@ nvwal_error_t nvwal_uninit(
   ret = 0;
 
   /** Stop flusher */
-  if (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
-    nvwal_atomic_store(&(wal->flusher_stop_requested_), 1U);
-    while (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
-      /** TODO Should have a sleep or at least yield */
-      /* NOTE: Do we need to kick the flusher one more time or should we assume
-       * assume the application's writer threads are responsible enough to
-       * call nvwal_on_wal_write one last time before the uninit happens?
-       */
-    }
+  nvwal_atomic_store(&(wal->flusher_stop_requested_), 1U);
+  while (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
+    sched_yield();
   }
 
   /** Stop fsyncer */
-  if (nvwal_atomic_load(&(wal->fsyncer_running_)) != 0) {
-    nvwal_atomic_store(&(wal->fsyncer_stop_requested_), 1U);
-    while (nvwal_atomic_load(&(wal->fsyncer_running_)) != 0) {
-    }
+  nvwal_atomic_store(&(wal->fsyncer_stop_requested_), 1U);
+  while (nvwal_atomic_load(&(wal->fsyncer_running_)) != 0) {
+    sched_yield();
   }
 
   for (i = 0; i < wal->segment_count_; ++i) {
@@ -389,7 +389,9 @@ uint64_t calculate_writer_offset_distance(
 
   assert_writer_current_frames(writer);
   buffer_size = writer->parent_->config_.writer_buffer_size_;
-  if (left_offset < right_offset) {
+  if (left_offset == right_offset) {
+    return 0;
+  } else  if (left_offset < right_offset) {
     return right_offset - left_offset;
   } else {
     return right_offset + buffer_size - left_offset;
@@ -411,10 +413,6 @@ void assure_writer_active_frame(
     /** The epoch exists. Most likely this case. */
   } else {
     /**
-     * Otherwise it wasn't purely increasing.
-     */
-    assert(frame->log_epoch_ == kNvwalInvalidEpoch);
-    /**
      * We newly populate this frame.
      * Release offsets before publisizing the frame (==store to epoch).
      */
@@ -426,6 +424,13 @@ void assure_writer_active_frame(
      */
     assert(writer->active_frame_ != writer->oldest_frame_);
     frame = writer->epoch_frames_ + writer->active_frame_;
+
+    /**
+     * Otherwise we caught up on the oldest.
+     * The 5-frames should be enough to prevent this.
+     */
+    assert(frame->log_epoch_ == kNvwalInvalidEpoch);
+
     nvwal_atomic_store_release(&frame->head_offset_, writer->last_tail_offset_);
     nvwal_atomic_store_release(&frame->tail_offset_, writer->last_tail_offset_);
     nvwal_atomic_store_release(&frame->log_epoch_, log_epoch);
@@ -450,8 +455,8 @@ nvwal_error_t nvwal_on_wal_write(
   assert(
     calculate_writer_offset_distance(
       writer,
-      frame->tail_offset_,
-      frame->head_offset_)
+      frame->head_offset_,
+      frame->tail_offset_)
     + bytes_written
       < writer->parent_->config_.writer_buffer_size_);
 
@@ -483,7 +488,7 @@ uint8_t nvwal_has_enough_writer_space(
  *  Flusher/Fsyncer
  *
  ***************************************************************************/
-nvwal_error_t process_one_writer(struct NvwalWriterContext* writer);
+nvwal_error_t flush_one_writer_to_nv(struct NvwalWriterContext* writer);
 nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment);
 
 nvwal_error_t nvwal_flusher_main(
@@ -496,6 +501,7 @@ nvwal_error_t nvwal_flusher_main(
 
   nvwal_atomic_store(&(wal->flusher_running_), 1);
   while (1) {
+    sched_yield();
     /** doesn't have to be seq_cst, and this code runs very frequently */
     if (nvwal_atomic_load_acquire(&(wal->flusher_stop_requested_)) != 0) {
       break;
@@ -503,7 +509,7 @@ nvwal_error_t nvwal_flusher_main(
 
     /* Look for work */
     for (cur_writer_id = 0; cur_writer_id < wal->config_.writer_count_; ++cur_writer_id) {
-      error_code = process_one_writer(wal->writers_ + cur_writer_id);
+      error_code = flush_one_writer_to_nv(wal->writers_ + cur_writer_id);
       if (error_code) {
         break;
       }
@@ -536,6 +542,7 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
   nvwal_atomic_store(&(wal->fsyncer_running_), 1);
   while (1) {
+    sched_yield();
     /** doesn't have to be seq_cst, and this code runs very frequently */
     if (nvwal_atomic_load_acquire(&(wal->fsyncer_stop_requested_)) != 0) {
       break;
@@ -629,7 +636,7 @@ error_return:
 }
 
 
-nvwal_error_t process_one_writer(
+nvwal_error_t flush_one_writer_to_nv(
   struct NvwalWriterContext * writer) {
   return 0;
 }
