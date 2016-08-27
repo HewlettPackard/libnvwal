@@ -155,7 +155,10 @@ nvwal_error_t nvwal_init(
   ret = 0;
 
   /* Initialize Metadata Store */
-  /* ret = mds_init(&wal->config_, wal); */
+  /* riet = mds_init(&wal->config_, wal); */
+
+  /* Initialize the reader context */
+  /* ret = reader_init(&wal->reader_); */
   if (ret) {
     goto error_return;
   }
@@ -309,6 +312,8 @@ nvwal_error_t nvwal_uninit(
     ret = nvwal_stock_error_code(ret, uninit_log_segment(wal->segments_ + i));
   }
 
+  /* Uninitialize reader */
+  /* ret = reader_uninit(&wal->reader_); */
   return ret;
 }
 
@@ -644,7 +649,8 @@ nvwal_error_t nvwal_reader_init(
   reader->tail_epoch_ = 0;
   reader->fetch_complete_ = 1;
   reader->seg_id_ = 0;
-
+  reader->mmap_start_ = NULL;
+  reader->mmap_len_ = 0;
   return 0;
 }
 
@@ -657,11 +663,12 @@ nvwal_error_t nvwal_reader_uninit(
 }
 
 nvwal_error_t get_epoch(
-  struct NvwalReaderContext* reader,
+  struct NvwalContext* wal,
   nvwal_epoch_t epoch,
   char ** buf,
   uint64_t * len) {
 
+  struct NvwalReaderContext *reader = &wal->reader_;
   nvwal_error_t error_code = 0;
   char* mmap_addr = 0;
   uint8_t first_mmap = 1;
@@ -669,6 +676,7 @@ nvwal_error_t get_epoch(
 
   /* Lookup the epoch info from the MDS */
   struct MdsEpochMetadata epoch_meta;
+  //mds_read_epoch(wal->mds, epoch, &epoch_meta); //need to catch a return code
 
   /* Is this a retry call because we didn't finish mmapping everything 
    * for the requested epoch? */
@@ -676,9 +684,20 @@ nvwal_error_t get_epoch(
   {
     /* Initialize our segment progress for this epoch */
     reader->seg_id_ = epoch_meta.from_seg_id_;
+  } else
+  {
+    /* We already have the last segment we tried to mmap.
+     * We need to clean up the previous mapping before 
+     * mapping more of this epoch.
+     * */
+    if (NULL != reader->mmap_start_)
+    {
+      munmap(reader->mmap_start_, reader->mmap_len_);
+      reader->mmap_start_ = NULL;
+      reader->mmap_len_ = 0;
+    } /* else, the client must have called done_with_epoch before 
+       * calling here again */
   }
-  /* else we already have the last segment we tried to mmap */
-
   do 
   {
 
@@ -694,7 +713,7 @@ nvwal_error_t get_epoch(
       } else
       {
         /* There are more segments to follow. Mmap to the end of the segment. */
-        map_len = kNvwalDefaultSegmentSize - epoch_meta.from_offset_;
+        map_len = wal->config_.segment_size_ - epoch_meta.from_offset_;
       }
 
       offset = epoch_meta.from_offset_;
@@ -711,6 +730,27 @@ nvwal_error_t get_epoch(
     }
 
     /* Lookup or infer the filename for this segment */
+
+
+    /* Is it on NVDIMM or disk? */
+#if 0
+    char backing_path[kNvwalMaxPathLength];
+    if (0)
+    {   
+      nvwal_concat_sequence_filename(
+      wal->config_.nv_root_, 
+      "nv_segment_",
+      reader->seg_id_,
+      backing_path);
+    } else
+    {
+      nvwal_concat_sequence_filename(
+        wal_->config_.disk_root_,
+        "nvwal_ds",
+        reader->seg_id_,
+        backing_path);
+    }
+#endif
     int fd = -1; /*= open();*/
     if (-1 == fd)
     {
@@ -738,6 +778,11 @@ nvwal_error_t get_epoch(
         return error_code; /* retry */
       }
     }
+
+    close(fd);
+
+    /* Atomically mark the segment as in use, if it's in NVDIMM */
+
     *len += map_len;
 
     mmap_addr += map_len;
@@ -746,8 +791,41 @@ nvwal_error_t get_epoch(
   
   } while (reader->seg_id_ <= epoch_meta.to_seg_id_);
 
+  
+  reader->mmap_start_ = *buf;
+  reader->mmap_len_ = *len;
   reader->fetch_complete_ = 1;
   reader->prev_epoch_ = epoch;
+
+  return error_code; /* no error */
+}
+
+nvwal_error_t consumed_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t const epoch)
+{
+  nvwal_error_t error_code = 0;
+  struct NvwalReaderContext *reader = &wal->reader_;
+  munmap(reader->mmap_start_, reader->mmap_len_);
+
+  struct MdsEpochMetadata epoch_meta;
+  //mds_read_epoch(wal->mds, epoch, &epoch_meta); //need to catch a return code
+
+  nvwal_dsid_t segment_id = epoch_meta.from_seg_id_;
+  do 
+  {
+
+    /* Is it on NVDIMM or disk? */
+
+    /* Atomically mark the segment as free, if it's in NVDIMM */
+
+    segment_id++;
+  
+  } while (segment_id <= epoch_meta.to_seg_id_);
+
+  
+  reader->mmap_start_ = NULL;
+  reader->mmap_len_ = 0;
 
   return error_code; /* no error */
 }

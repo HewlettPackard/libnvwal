@@ -189,10 +189,20 @@ nvwal_error_t nvwal_reader_uninit(
  *
  */
 nvwal_error_t get_epoch(
-  struct NvwalReaderContext* reader,
+  struct NvwalContext* wal,
   nvwal_epoch_t const epoch, 
   char ** buf, 
   uint64_t* len);
+
+/**
+ * @brief Notifies the reader that the epoch has been processed
+ * and is no longer needed.
+ * @param[in] epoch The requested epoch
+ *
+ */
+nvwal_error_t consumed_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t const epoch);
 
 #ifdef __cplusplus
 }

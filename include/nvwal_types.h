@@ -528,10 +528,15 @@ struct NvwalMdsContext {
  * and nvwal_reader_uninit().
  */
 struct NvwalReaderContext {
+  struct NvwalContext* wal_;
   nvwal_epoch_t prev_epoch_; /* The epoch most recently requested and fetched */
   nvwal_epoch_t tail_epoch_; /* The largest epoch number we've prefetched */
-  uint8_t fetch_complete_;
-  uint64_t seg_id_; /* The last segment we tried to mmap */
+  uint8_t fetch_complete_; /* Do we have to break the epoch into multiple mappings? */
+  nvwal_dsid_t seg_id_; /* The last segment we tried to mmap */
+  char *mmap_start_; /* Remember our mmap info for munmap later */
+  uint64_t mmap_len_; /* We only remember info for one mapping. If the epoch needs
+                      * multiple mappings, unmap the previous mapping before
+                      * mapping the next chuck. */ 
 };
 
 /**
@@ -601,6 +606,11 @@ struct NvwalContext {
    * Metadata store context 
    */
   struct NvwalMdsContext mds_;
+
+  /**
+   * Reader context
+   */
+  struct NvwalReaderContext reader_;
 };
 
 /** @} */
