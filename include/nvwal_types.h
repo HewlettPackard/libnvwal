@@ -178,11 +178,8 @@ typedef int8_t    nvwal_byte_t;
  * on-disk file named "nvwal_segment_xxxxxxxx" where xxxx is a hex string of
  * DSID (always 8 characters).
  *
- * We so far assume there are at most 2^32 segments in total.
- * With 32MB/segment, this is 2^57 bytes of logs... should be enough.
- * @see kNvwalInvalidDsid
  */
-typedef uint32_t  nvwal_dsid_t;
+typedef uint64_t  nvwal_dsid_t;
 
 
 enum NvwalConstants {
