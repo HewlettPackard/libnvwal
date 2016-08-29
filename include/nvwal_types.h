@@ -529,7 +529,8 @@ struct NvwalReaderContext {
   nvwal_epoch_t prev_epoch_; /* The epoch most recently requested and fetched */
   nvwal_epoch_t tail_epoch_; /* The largest epoch number we've prefetched */
   uint8_t fetch_complete_; /* Do we have to break the epoch into multiple mappings? */
-  nvwal_dsid_t seg_id_; /* The last segment we tried to mmap */
+  nvwal_dsid_t seg_id_start_; /* The first segment we mmaped for this get_epoch call */
+  nvwal_dsid_t seg_id_end_; /* The last segment we tried to mmap */
   char *mmap_start_; /* Remember our mmap info for munmap later */
   uint64_t mmap_len_; /* We only remember info for one mapping. If the epoch needs
                       * multiple mappings, unmap the previous mapping before

@@ -196,8 +196,10 @@ nvwal_error_t get_epoch(
 
 /**
  * @brief Notifies the reader that the epoch has been processed
- * and is no longer needed.
- * @param[in] epoch The requested epoch
+ * and is no longer needed. If the epoch was not completely fetched,
+ * it is desirable, but not necessary, to call consumed_epoch() before
+ * reinvoking get_epoch();
+ * @param[in] epoch The consumed epoch
  *
  */
 nvwal_error_t consumed_epoch(

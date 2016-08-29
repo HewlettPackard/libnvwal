@@ -655,7 +655,8 @@ nvwal_error_t nvwal_reader_init(
   reader->prev_epoch_ = 0;
   reader->tail_epoch_ = 0;
   reader->fetch_complete_ = 1;
-  reader->seg_id_ = 0;
+  reader->seg_id_start_ = 0;
+  reader->seg_id_end_ = 0;
   reader->mmap_start_ = NULL;
   reader->mmap_len_ = 0;
   return 0;
@@ -690,18 +691,22 @@ nvwal_error_t get_epoch(
   if (reader->fetch_complete_)
   {
     /* Initialize our segment progress for this epoch */
-    reader->seg_id_ = epoch_meta.from_seg_id_;
+    reader->seg_id_start_ = epoch_meta.from_seg_id_;
+    reader->seg_id_end_ = epoch_meta.from_seg_id_;
   } else
   {
+    /* If epoch != prev_epoch, it means we didn't finish returning
+     * all of prev_epoch, but now the client is asking for a different
+     * epoch. Is this intentional? */
+
     /* We already have the last segment we tried to mmap.
      * We need to clean up the previous mapping before 
      * mapping more of this epoch.
      * */
     if (NULL != reader->mmap_start_)
     {
-      munmap(reader->mmap_start_, reader->mmap_len_);
-      reader->mmap_start_ = NULL;
-      reader->mmap_len_ = 0;
+      consumed_epoch(wal, epoch);
+      reader->seg_id_start_ = reader->seg_id_end_;
     } /* else, the client must have called done_with_epoch before 
        * calling here again */
   }
@@ -709,8 +714,8 @@ nvwal_error_t get_epoch(
   {
 
     uint64_t offset = 0;
-    uint64_t map_len;
-    if (reader->seg_id_ == epoch_meta.from_seg_id_)
+    uint64_t map_len = 0;
+    if (reader->seg_id_end_ == epoch_meta.from_seg_id_)
     {
       /* This is the first segment */
       if (epoch_meta.from_seg_id_ == epoch_meta.to_seg_id_)
@@ -724,10 +729,10 @@ nvwal_error_t get_epoch(
       }
 
       offset = epoch_meta.from_offset_;
-    } else if (reader->seg_id_ < epoch_meta.to_seg_id_)
+    } else if (reader->seg_id_end_ < epoch_meta.to_seg_id_)
     {
       /* This is a middle segment; we're going to map the entire segment. */
-      map_len = kNvwalDefaultSegmentSize;
+      map_len = wal->config_.segment_size_;
       offset = 0;
     } else
     {
@@ -744,17 +749,21 @@ nvwal_error_t get_epoch(
     char backing_path[kNvwalMaxPathLength];
     if (0)
     {   
+      /* Atomically mark the segment as in use, if it's in NVDIMM */
       nvwal_concat_sequence_filename(
       wal->config_.nv_root_, 
       "nv_segment_",
-      reader->seg_id_,
+      reader->seg_id_end_,
       backing_path);
+      /* Did it get cleaned between time of check to time of use? 
+       * Need to catch a return value here. */
+    
     } else
     {
       nvwal_concat_sequence_filename(
         wal_->config_.disk_root_,
         "nvwal_ds",
-        reader->seg_id_,
+        reader->seg_id_end_,
         backing_path);
     }
 #endif
@@ -788,20 +797,20 @@ nvwal_error_t get_epoch(
 
     close(fd);
 
-    /* Atomically mark the segment as in use, if it's in NVDIMM */
 
     *len += map_len;
 
     mmap_addr += map_len;
 
-    reader->seg_id_++;
+    reader->seg_id_end_++;
   
-  } while (reader->seg_id_ <= epoch_meta.to_seg_id_);
+  } while (reader->seg_id_end_ <= epoch_meta.to_seg_id_);
 
   
   reader->mmap_start_ = *buf;
   reader->mmap_len_ = *len;
   reader->fetch_complete_ = 1;
+  reader->seg_id_end_--; /* seg_id_end_ should be the last seg_id for this epoch */
   reader->prev_epoch_ = epoch;
 
   return error_code; /* no error */
@@ -813,26 +822,38 @@ nvwal_error_t consumed_epoch(
 {
   nvwal_error_t error_code = 0;
   struct NvwalReaderContext *reader = &wal->reader_;
-  munmap(reader->mmap_start_, reader->mmap_len_);
 
   struct MdsEpochMetadata epoch_meta;
   //mds_read_epoch(wal->mds, epoch, &epoch_meta); //need to catch a return code
 
-  nvwal_dsid_t segment_id = epoch_meta.from_seg_id_;
+  if (NULL != reader->mmap_start_)
+  {
+    /* We only know about the last contiguous mapping we completed.
+     * get_epoch() unmapped the previous region when retrying to finish mapping the
+     * desired epoch. Can the client abuse this API and cause us to
+     * lose track of maps and be unable munmap them? */
+    munmap(reader->mmap_start_, reader->mmap_len_);
+    reader->mmap_start_ = NULL;
+    reader->mmap_len_ = 0;
+  }
+
+  nvwal_dsid_t segment_id = reader->seg_id_start_; 
+  /* If we couldn't mmap the entire epoch in a contiguous mapping, seg_id_end_ is the one we failed to map */
+  /* If !fetch_complete_ and start_ == end_, it means we failed on mapping the first segment. Nothing to do. 
+   * segment_id_last < segment_id */ 
+  nvwal_dsid_t segment_id_last =  (reader->fetch_complete_) ? epoch_meta.to_seg_id_ : reader->seg_id_end_-1;
+
   do 
   {
 
     /* Is it on NVDIMM or disk? */
 
-    /* Atomically mark the segment as free, if it's in NVDIMM */
+    /* Atomically mark the segment as free or some quiesced state, if it's in NVDIMM */
 
     segment_id++;
   
-  } while (segment_id <= epoch_meta.to_seg_id_);
+  } while (segment_id <= segment_id_last);
 
-  
-  reader->mmap_start_ = NULL;
-  reader->mmap_len_ = 0;
 
   return error_code; /* no error */
 }
