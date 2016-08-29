@@ -261,7 +261,7 @@ enum NvwalConstants {
   kNvwalMdsMaxActivePagefiles = 1U,
 
   /**
-   * @brief Largest number of pages being buffered.
+   * @brief Largest number of pages being buffered for reading.
    */
   kNvwalMdsMaxBufferPages = 1U,
 
@@ -503,7 +503,7 @@ struct NvwalMdsBufferManagerContext {
   struct NvwalConfig config_;
 
   /** Buffers */
-  struct NvwalMdsBuffer* buffers_[kNvwalMdsMaxBufferPages];
+  struct NvwalMdsBuffer* write_buffers_[kNvwalMdsMaxActivePagefiles];
 };
 
 /**
@@ -517,6 +517,9 @@ struct NvwalMdsContext {
 
   /** Buffer manager context */
   struct NvwalMdsBufferManagerContext bufmgr_;   
+
+  /** Latest epoch */
+  nvwal_epoch_t latest_epoch_;
 };
 
 /**

@@ -71,7 +71,7 @@ nvwal_error_t mds_uninit(struct NvwalContext* wal);
 /**
  * @brief Writes epoch \a epoch_metadata.
  *
- * @param[in] mds metadata store context
+ * @param[in] wal nvwal context
  * @param[in] epoch_metadata epoch
  * 
  * @details
@@ -79,7 +79,7 @@ nvwal_error_t mds_uninit(struct NvwalContext* wal);
  * guaranteed to be durable.
  */
 nvwal_error_t mds_write_epoch(
-  struct NvwalMdsContext* mds, 
+  struct NvwalContext* wal, 
   struct MdsEpochMetadata* epoch_metadata);
 
 
