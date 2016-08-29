@@ -38,7 +38,7 @@
  ***************************************************************************/
 
 void nvwal_impl_thread_state_get_ready(uint8_t* thread_state) {
-  assert(*thread_state == kNvwalThreadStateNotInitialized);
+  assert(*thread_state == kNvwalThreadStateBeingInitialized);
   nvwal_atomic_store(thread_state, kNvwalThreadStateAcceptStart);
 }
 
@@ -58,13 +58,30 @@ enum NvwalThreadState nvwal_impl_thread_state_try_start(uint8_t* thread_state) {
   }
 }
 
-void nvwal_impl_thread_state_stop(
+void nvwal_impl_thread_state_wait_for_start(const uint8_t* thread_state) {
+  assert(*thread_state == kNvwalThreadStateAcceptStart ||
+    *thread_state == kNvwalThreadStateRunning);
+  while (1) {
+    sched_yield();
+    if (nvwal_atomic_load(thread_state) == kNvwalThreadStateRunning) {
+      break;
+    }
+  }
+}
+
+void nvwal_impl_thread_state_request_and_wait_for_stop(
   uint8_t* thread_state) {
-  if ((*thread_state) == kNvwalThreadStateNotInitialized) {
+  if ((*thread_state) == kNvwalThreadStateBeingInitialized
+    || (*thread_state) == kNvwalThreadStateProhibitStart
+    || (*thread_state) == kNvwalThreadStateStopped) {
     /** Then there is no race. The thread hasn't started either */
     return;
   }
 
+  assert(
+    (*thread_state) == kNvwalThreadStateAcceptStart
+    || (*thread_state) == kNvwalThreadStateRunning
+    || (*thread_state) == kNvwalThreadStateStopped);
   /** Try direct transition without requesting the thread */
   {
     uint8_t expected = kNvwalThreadStateAcceptStart;
@@ -362,8 +379,8 @@ nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment);
 nvwal_error_t nvwal_impl_uninit(
   struct NvwalContext* wal) {
   /** Stop flusher and fsyncer */
-  nvwal_impl_thread_state_stop(&wal->flusher_thread_state_);
-  nvwal_impl_thread_state_stop(&wal->fsyncer_thread_state_);
+  nvwal_impl_thread_state_request_and_wait_for_stop(&wal->flusher_thread_state_);
+  nvwal_impl_thread_state_request_and_wait_for_stop(&wal->fsyncer_thread_state_);
 
   /** uninit continues as much as possible even after an error. */
   nvwal_error_t last_seen_error = 0;

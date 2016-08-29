@@ -197,6 +197,15 @@ uint8_t nvwal_has_enough_writer_space(
 nvwal_error_t flush_one_writer_to_nv(struct NvwalWriterContext* writer);
 nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment);
 
+
+void nvwal_wait_for_flusher_start(struct NvwalContext* wal) {
+  nvwal_impl_thread_state_wait_for_start(&wal->flusher_thread_state_);
+}
+
+void nvwal_wait_for_fsync_start(struct NvwalContext* wal) {
+  nvwal_impl_thread_state_wait_for_start(&wal->fsyncer_thread_state_);
+}
+
 nvwal_error_t nvwal_flusher_main(
   struct NvwalContext* wal) {
   uint32_t cur_writer_id;
@@ -204,6 +213,14 @@ nvwal_error_t nvwal_flusher_main(
 
   error_code = 0;
   uint8_t* const thread_state = &wal->flusher_thread_state_;
+
+  enum NvwalThreadState state
+    = nvwal_impl_thread_state_try_start(thread_state);
+  if (state != kNvwalThreadStateRunning) {
+    /** Either the WAL context is already stopped or not in a valid state */
+    errno = EIO;  /* Not sure appropriate, but closest */
+    return EIO;
+  }
 
   while (1) {
     sched_yield();
@@ -279,6 +296,7 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
   return error_code;
 }
+
 
 nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
   nvwal_error_t ret;

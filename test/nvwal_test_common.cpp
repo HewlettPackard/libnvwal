@@ -138,6 +138,7 @@ void WalResource::launch_flusher() {
       this->flusher_exit_code_ = nvwal_flusher_main(&this->wal_instance_);
     }
   ));
+  nvwal_wait_for_flusher_start(&wal_instance_);
 }
 
 void WalResource::launch_fsyncer() {
@@ -146,6 +147,7 @@ void WalResource::launch_fsyncer() {
       this->fsyncer_exit_code_ = nvwal_fsync_main(&this->wal_instance_);
     }
   ));
+  nvwal_wait_for_fsync_start(&wal_instance_);
 }
 
 void WalResource::join_flusher() {

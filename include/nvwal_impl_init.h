@@ -62,7 +62,7 @@ enum NvwalThreadState {
    * \li When ready, nvwal_init will atomically change this to AcceptStart.
    * No other state-change is expected.
    */
-  kNvwalThreadStateNotInitialized = 0,
+  kNvwalThreadStateBeingInitialized = 0,
 
   /**
    * nvwal_init is done and now flusher/fsyncher can start.
@@ -100,7 +100,7 @@ enum NvwalThreadState {
 };
 
 /**
- * Change the state from kNvwalThreadStateNotInitialized to
+ * Change the state from kNvwalThreadStateBeingInitialized to
  * kNvwalThreadStateAcceptStart.
  * @see NvwalThreadState
  */
@@ -126,11 +126,18 @@ enum NvwalThreadState nvwal_impl_thread_state_try_start(
 
 /**
  * An internal method for the host thread
+ * to wait until a flusher/fsyncer thread ack-s its start.
+ * @see NvwalThreadState
+ */
+void nvwal_impl_thread_state_wait_for_start(const uint8_t* thread_state);
+
+/**
+ * An internal method for the host thread
  * to request a flusher/fsyncer thread to stop and wait until they stop.
  * This method might block until the flusher/fsyncer thread finds the stop-request.
  * @see NvwalThreadState
  */
-void nvwal_impl_thread_state_stop(
+void nvwal_impl_thread_state_request_and_wait_for_stop(
   uint8_t* thread_state);
 
 
