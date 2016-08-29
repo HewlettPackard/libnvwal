@@ -49,7 +49,6 @@ struct MdsEpochMetadata {
   };
 };
 
-_Static_assert(sizeof(struct MdsEpochMetadata) == 64, "Epoch metadata must match NV-DIMM failure-atomic unit size");
 
 
 /** @} */

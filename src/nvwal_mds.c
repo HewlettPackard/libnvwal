@@ -34,6 +34,12 @@
 #include "nvwal_types.h"
 #include "nvwal_util.h"
 
+/* 
+ * The type is defined in nvwal_mds_types.h but we do the assert check 
+ * here to ensure header files can be compiled with older C compilers 
+ */
+static_assert(sizeof(struct MdsEpochMetadata) == 64, 
+              "Epoch metadata must match NV-DIMM failure-atomic unit size");
 
 #define ASSERT_FD_VALID(fd) assert(fd != -1)
 
@@ -658,7 +664,7 @@ nvwal_error_t mds_bufmgr_alloc_page(
  */
 static inline nvwal_epoch_t normalize_epoch_id(nvwal_epoch_t epoch_id)
 {
-  _Static_assert(kNvwalInvalidEpoch == 0, "Invalid epoch expected to be 0 but is not.");
+  static_assert(kNvwalInvalidEpoch == 0, "Invalid epoch expected to be 0 but is not.");
   return epoch_id - 1;
 }
 
