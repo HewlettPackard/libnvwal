@@ -30,315 +30,21 @@
 #include <sys/types.h>
 
 #include "nvwal_atomics.h"
+#include "nvwal_impl_init.h"
 #include "nvwal_mds.h"
 #include "nvwal_util.h"
 #include "nvwal_mds_types.h"
 
-/**************************************************************************
- *
- *  Initializations
- *
- ***************************************************************************/
-
-/** subroutine of nvwal_init() used to create fresh new segment, not during restart */
-nvwal_error_t init_fresh_nvram_segment(
-  struct NvwalContext * wal,
-  struct NvwalLogSegment* segment,
-  nvwal_dsid_t dsid);
-/** subroutine of nvwal_uninit() or failed nvwal_init() */
-nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment);
-
-void remove_trailing_slash(char* path, uint16_t* len) {
-  while ((*len) > 0 && path[(*len) - 1] == '/') {
-    path[(*len) - 1] = '\0';
-    --(*len);
-  }
-}
-
+/** Lengthy init/uninit were moved to nvwal_impl_init.c */
 nvwal_error_t nvwal_init(
   const struct NvwalConfig* given_config,
   struct NvwalContext* wal) {
-  uint32_t i;
-  nvwal_error_t ret;
-  struct NvwalWriterContext* writer;
-  struct NvwalConfig* config;
-  nvwal_dsid_t resuming_dsid;
-
-  /** otherwise the following memzero will also reset config, ouch */
-  config = &(wal->config_);
-  if (config == given_config) {
-    return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
-  }
-
-  memset(wal, 0, sizeof(*wal));
-  memcpy(config, given_config, sizeof(*config));
-
-  /** Check/adjust nv_root/disk_root */
-  config->nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
-  config->disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
-  if (config->nv_root_len_ <= 1U) {
-    return nvwal_raise_einval("Error: nv_root must be a valid full path\n");
-  } else if (config->nv_root_len_ >= kNvwalMaxPathLength) {
-    return nvwal_raise_einval("Error: nv_root must be null terminated\n");
-  } else if (config->nv_root_len_ >= kNvwalMaxFolderPathLength) {
-    return nvwal_raise_einval_llu(
-      "Error: nv_root must be at most %llu characters\n",
-      kNvwalMaxFolderPathLength);
-  } else if (config->disk_root_len_ <= 1U) {
-    return nvwal_raise_einval("Error: disk_root must be a valid full path\n");
-  } else if (config->disk_root_len_ >= kNvwalMaxPathLength) {
-    return nvwal_raise_einval("Error: disk_root_ must be null terminated\n");
-  } else if (config->disk_root_len_ >= kNvwalMaxFolderPathLength) {
-    return nvwal_raise_einval_llu(
-      "Error: disk_root must be at most %llu characters\n",
-      kNvwalMaxFolderPathLength);
-  }
-  remove_trailing_slash(config->nv_root_, &config->nv_root_len_);
-  remove_trailing_slash(config->disk_root_, &config->disk_root_len_);
-
-  /** Check writer_count, writer_buffer_size, writer_buffers */
-  if (config->writer_count_ == 0 || config->writer_count_ > kNvwalMaxWorkers) {
-    return nvwal_raise_einval_llu(
-      "Error: writer_count must be 1 to %llu\n",
-      kNvwalMaxWorkers);
-  } else if ((config->writer_buffer_size_ % 512U) || config->writer_buffer_size_ == 0) {
-    return nvwal_raise_einval(
-      "Error: writer_buffer_size must be a non-zero multiply of page size (512)\n");
-  }
-
-  for (i = 0; i < config->writer_count_; ++i) {
-    if (!config->writer_buffers_[i]) {
-      return nvwal_raise_einval_llu(
-        "Error: writer_buffers[ %llu ] is null\n",
-        i);
-    }
-  }
-
-  if (config->segment_size_ % 512 != 0) {
-    return nvwal_raise_einval(
-      "Error: segment_size_ must be a multiply of 512\n");
-  }
-  if (config->segment_size_ == 0) {
-    config->segment_size_ = kNvwalDefaultSegmentSize;
-  }
-  wal->segment_count_ = config->nv_quota_ / config->segment_size_;
-  if (config->nv_quota_ % config->segment_size_ != 0) {
-    return nvwal_raise_einval(
-      "Error: nv_quota must be a multiply of segment size\n");
-  } else if (wal->segment_count_ < 2U) {
-    return nvwal_raise_einval(
-      "Error: nv_quota must be at least of two segments\n");
-  } else if (wal->segment_count_ > kNvwalMaxActiveSegments) {
-    return nvwal_raise_einval_llu(
-      "Error: nv_quota must be at most %llu segments\n",
-      (uint64_t) kNvwalMaxActiveSegments);
-  }
-
-  if (config->resuming_epoch_ == kNvwalInvalidEpoch) {
-    config->resuming_epoch_ = 1;
-  }
-  wal->durable_epoch_ = config->resuming_epoch_;
-  wal->stable_epoch_ = config->resuming_epoch_;
-  wal->next_epoch_ = nvwal_increment_epoch(config->resuming_epoch_);
-
-  /** TODO we should retrieve from MDS in restart case */
-  for (i = 0; i < config->writer_count_; ++i) {
-    writer = wal->writers_ + i;
-    writer->parent_ = wal;
-    writer->oldest_frame_ = 0;
-    writer->active_frame_ = 0;
-    writer->writer_seq_id_ = i;
-    writer->last_tail_offset_ = 0;
-    writer->copied_offset_ = 0;
-    writer->buffer_ = config->writer_buffers_[i];
-    memset(writer->epoch_frames_, 0, sizeof(writer->epoch_frames_));
-    writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
-  }
-
-  /**
-   * From now on, error-return might have to release a few things.
-   * Invoke nvwal_uninit on error-return.
-   */
-  ret = 0;
-
-  /* Initialize Metadata Store */
-  /* riet = mds_init(&wal->config_, wal); */
-
-  /* Initialize the reader context */
-  /* ret = reader_init(&wal->reader_); */
-  if (ret) {
-    goto error_return;
-  }
-
-  /* Initialize all nv segments */
-  resuming_dsid = 0 + 1;  /** TODO we should retrieve from MDS in restart case */
-  for (i = 0; i < wal->segment_count_; ++i) {
-    memset(wal->segments_, 0, sizeof(struct NvwalLogSegment));
-    ret = init_fresh_nvram_segment(wal, wal->segments_ + i, resuming_dsid + i);
-    if (ret) {
-      goto error_return;
-    }
-  }
-
-  /* Created files on NVDIMM/Disk, fsync parent directory */
-  ret = nvwal_open_and_fsync(config->nv_root_);
-  if (ret) {
-    goto error_return;
-  }
-  ret = nvwal_open_and_fsync(config->disk_root_);
-  if (ret) {
-    goto error_return;
-  }
-  return 0;
-
-error_return:
-  assert(ret);
-  nvwal_uninit(wal);
-  /** Error code of uninit is ignored. Our own ret is probably more informative */
-  errno = ret;
-  return ret;
+  return nvwal_impl_init(given_config, wal);
 }
-
-nvwal_error_t init_fresh_nvram_segment(
-  struct NvwalContext* wal,
-  struct NvwalLogSegment* segment,
-  nvwal_dsid_t dsid) {
-  nvwal_error_t ret;
-  char nv_path[kNvwalMaxPathLength];
-
-  assert(dsid != kNvwalInvalidDsid);
-  assert(wal->config_.nv_root_len_ + 32U < kNvwalMaxPathLength);
-  ret = 0;
-  segment->nv_fd_ = 0;
-  segment->nv_baseaddr_ = 0;
-
-  segment->parent_ = wal;
-  segment->dsid_ = dsid;
-
-  nvwal_concat_sequence_filename(
-    wal->config_.nv_root_,
-    "nv_segment_",
-    dsid,
-    nv_path);
-
-  segment->nv_fd_ = nvwal_open_best_effort_o_direct(
-    nv_path,
-    O_CREAT | O_RDWR,
-    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-
-  if (segment->nv_fd_ == -1) {
-    /** Failed to open/create the file! */
-    ret = errno;
-    goto error_return;
-  }
-
-  assert(segment->nv_fd_);  /** open never returns 0 */
-
-  if (posix_fallocate(segment->nv_fd_, 0, wal->config_.segment_size_)) {
-    /** posix_fallocate doesn't set errno, do it ourselves */
-    ret = EINVAL;
-    goto error_return;
-  }
-
-  if (ftruncate(segment->nv_fd_, wal->config_.segment_size_)) {
-    /** Failed to set the file length! */
-    ret = errno;
-    goto error_return;
-  }
-
-  if (fsync(segment->nv_fd_)) {
-    /** Failed to fsync! */
-    ret = errno;
-    goto error_return;
-  }
-
-  /**
-   * Don't bother (non-transparent) huge pages. Even libpmem doesn't try it.
-   */
-  segment->nv_baseaddr_ = mmap(0,
-                  wal->config_.segment_size_,
-                  PROT_READ | PROT_WRITE,
-                  MAP_ANONYMOUS | MAP_PRIVATE,
-                  segment->nv_fd_,
-                  0);
-
-  if (segment->nv_baseaddr_ == MAP_FAILED) {
-    ret = errno;
-    goto error_return;
-  }
-  assert(segment->nv_baseaddr_);
-
-  /*
-   * Even with fallocate we don't trust the metadata to be stable
-   * enough for userspace durability. Actually write some bytes!
-   */
-  memset(segment->nv_baseaddr_, 0, wal->config_.segment_size_);
-  msync(segment->nv_baseaddr_, wal->config_.segment_size_, MS_SYNC);
-  return 0;
-
-error_return:
-  uninit_log_segment(segment);
-  errno = ret;
-  return ret;
-}
-
-
-/**************************************************************************
- *
- *  Un-Initializations
- *
- ***************************************************************************/
 
 nvwal_error_t nvwal_uninit(
   struct NvwalContext* wal) {
-  nvwal_error_t ret;  /* last-seen error code */
-  int i;
-
-  ret = 0;
-
-  /** Stop flusher */
-  nvwal_atomic_store(&(wal->flusher_stop_requested_), 1U);
-  while (nvwal_atomic_load(&(wal->flusher_running_)) != 0) {
-    sched_yield();
-  }
-
-  /** Stop fsyncer */
-  nvwal_atomic_store(&(wal->fsyncer_stop_requested_), 1U);
-  while (nvwal_atomic_load(&(wal->fsyncer_running_)) != 0) {
-    sched_yield();
-  }
-
-  for (i = 0; i < wal->segment_count_; ++i) {
-    ret = nvwal_stock_error_code(ret, uninit_log_segment(wal->segments_ + i));
-  }
-
-  /* Uninitialize reader */
-  /* ret = reader_uninit(&wal->reader_); */
-  return ret;
-}
-
-nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
-  nvwal_error_t ret;  /* last-seen error code */
-
-  ret = 0;
-
-  if (segment->nv_baseaddr_ && segment->nv_baseaddr_ != MAP_FAILED) {
-    if (munmap(segment->nv_baseaddr_, segment->parent_->config_.segment_size_) == -1) {
-      ret = nvwal_stock_error_code(ret, errno);
-    }
-  }
-  segment->nv_baseaddr_ = 0;
-
-  if (segment->nv_fd_ && segment->nv_fd_ != -1) {
-    if (close(segment->nv_fd_) == -1) {
-      ret = nvwal_stock_error_code(ret, errno);
-    }
-  }
-  segment->nv_fd_ = 0;
-
-  memset(segment, 0, sizeof(struct NvwalLogSegment));
-
-  return ret;
+  return nvwal_impl_uninit(wal);
 }
 
 
@@ -497,13 +203,12 @@ nvwal_error_t nvwal_flusher_main(
   nvwal_error_t error_code;
 
   error_code = 0;
-  /** whatever error checks here */
+  uint8_t* const thread_state = &wal->flusher_thread_state_;
 
-  nvwal_atomic_store(&(wal->flusher_running_), 1);
   while (1) {
     sched_yield();
     /** doesn't have to be seq_cst, and this code runs very frequently */
-    if (nvwal_atomic_load_acquire(&(wal->flusher_stop_requested_)) != 0) {
+    if (nvwal_atomic_load_acquire(thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
       break;
     }
 
@@ -522,12 +227,12 @@ nvwal_error_t nvwal_flusher_main(
       //commit_metadata_updates(wal)
 
       /** Promptly react when obvious. but no need to be atomic read. */
-      if (wal->flusher_stop_requested_) {
+      if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
         break;
       }
     }
   }
-  nvwal_atomic_store(&(wal->flusher_running_), 0);
+  nvwal_impl_thread_state_stopped(thread_state);
 
   return error_code;
 }
@@ -537,14 +242,21 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
   nvwal_error_t error_code;
   struct NvwalLogSegment* segment;
 
-  error_code = 0;
-  /** whatever error checks here */
+  uint8_t* const thread_state = &wal->fsyncer_thread_state_;
 
-  nvwal_atomic_store(&(wal->fsyncer_running_), 1);
+  error_code = 0;
+  enum NvwalThreadState state
+    = nvwal_impl_thread_state_try_start(thread_state);
+  if (state != kNvwalThreadStateRunning) {
+    /** Either the WAL context is already stopped or not in a valid state */
+    errno = EIO;  /* Not sure appropriate, but closest */
+    return EIO;
+  }
+
   while (1) {
     sched_yield();
     /** doesn't have to be seq_cst, and this code runs very frequently */
-    if (nvwal_atomic_load_acquire(&(wal->fsyncer_stop_requested_)) != 0) {
+    if (nvwal_atomic_load_acquire(thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
       break;
     }
 
@@ -558,12 +270,12 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
       }
 
       /** Promptly react when obvious. but no need to be atomic read. */
-      if (wal->fsyncer_stop_requested_) {
+      if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
         break;
       }
     }
   }
-  nvwal_atomic_store(&(wal->fsyncer_running_), 0);
+  nvwal_impl_thread_state_stopped(thread_state);
 
   return error_code;
 }
@@ -613,7 +325,7 @@ nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
     total_writen += written;
 
     /** Is this fsyncher cancelled for some reason? */
-    if (segment->parent_->fsyncer_stop_requested_) {
+    if (segment->parent_->fsyncer_thread_state_ == kNvwalThreadStateRunningAndRequestedStop) {
       ret = ETIMEDOUT;  /* Not sure this is appropriate.. */
       goto error_return;
     }

@@ -264,7 +264,6 @@ enum NvwalConstants {
    * @brief Largest number of pages being buffered for reading.
    */
   kNvwalMdsMaxBufferPages = 1U,
-
 };
 
 /**
@@ -599,22 +598,16 @@ struct NvwalContext {
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 
   /**
-   * Used to inform the flusher that nvwal_uninit() was invoked.
+   * Controls the state of flusher thread.
+   * One of the values in NvwalThreadState.
    */
-  uint8_t flusher_stop_requested_;
-  /**
-   * Set when the flusher thread started running.
-   */
-  uint8_t flusher_running_;
+  uint8_t flusher_thread_state_;
 
   /**
-   * Used to inform the fsyncer that nvwal_uninit() was invoked.
+   * Controls the state of fsyncer thread.
+   * One of the values in NvwalThreadState.
    */
-  uint8_t fsyncer_stop_requested_;
-  /**
-   * Set when the fsyncer thread started running.
-   */
-  uint8_t fsyncer_running_;
+  uint8_t fsyncer_thread_state_;
 
   /**
    * Metadata store context 

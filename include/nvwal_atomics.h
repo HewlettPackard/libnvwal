@@ -68,14 +68,14 @@ typedef enum {
 #define nvwal_atomic_exchange_explicit(PTR, VAL, ORD)\
   atomic_exchange_explicit(PTR, VAL, ORD)
 
-#define nvwal_atomic_compare_exchange_weak(PTR, VAL)\
-  atomic_compare_exchange_weak(PTR, VAL)
-#define nvwal_atomic_compare_exchange_weak_explicit(PTR, VAL, ORD)\
-  atomic_compare_exchange_weak_explicit(PTR, VAL, ORD)
-#define nvwal_atomic_compare_exchange_strong(PTR, VAL)\
-  atomic_compare_exchange_strong(PTR, VAL)
-#define nvwal_atomic_compare_exchange_strong_explicit(PTR, VAL, ORD)\
-  atomic_compare_exchange_strong_explicit(PTR, VAL, ORD)
+#define nvwal_atomic_compare_exchange_weak(PTR, VAL, DES)\
+  atomic_compare_exchange_weak(PTR, VAL, DES)
+#define nvwal_atomic_compare_exchange_weak_explicit(PTR, VAL, DES, ORD)\
+  atomic_compare_exchange_weak_explicit(PTR, VAL, DES, ORD)
+#define nvwal_atomic_compare_exchange_strong(PTR, VAL, DES)\
+  atomic_compare_exchange_strong(PTR, VAL, DES)
+#define nvwal_atomic_compare_exchange_strong_explicit(PTR, VAL, DES, ORD)\
+  atomic_compare_exchange_strong_explicit(PTR, VAL, DES, ORD)
 
 #define nvwal_atomic_fetch_add(PTR, VAL) atomic_fetch_add(PTR, VAL)
 #define nvwal_atomic_fetch_add_explicit(PTR, VAL, ORD)\
