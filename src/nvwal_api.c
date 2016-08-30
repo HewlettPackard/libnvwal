@@ -194,24 +194,37 @@ uint8_t nvwal_has_enough_writer_space(
  *  Flusher/Fsyncer
  *
  ***************************************************************************/
-nvwal_error_t flush_one_writer_to_nv(struct NvwalWriterContext* writer);
-nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment);
 
+/**
+ * Fsluher calls this to copy one writer's private buffer to NV-segment.
+ * This method does not drain or fsync because we expect that
+ * this method is frequently called and catches up with writers
+ * after a small gap.
+ */
+nvwal_error_t flusher_copy_one_writer_to_nv(
+  struct NvwalWriterContext* writer,
+  nvwal_epoch_t target_epoch,
+  uint8_t is_stable_epoch);
+
+/**
+ * Flusher calls this when one NV segment becomes full.
+ * It recycles and populates the next segment, potentialy waiting for something.
+ * Once this method returns without an error, segments_[cur_seg_idx_] is guaranteed
+ * to be non-full.
+ */
+nvwal_error_t flusher_move_onto_next_nv_segment(
+  struct NvwalContext* wal);
+
+/** nvwal_flusher_main() just keeps calling this */
+nvwal_error_t flusher_main_loop(struct NvwalContext* wal);
 
 void nvwal_wait_for_flusher_start(struct NvwalContext* wal) {
   nvwal_impl_thread_state_wait_for_start(&wal->flusher_thread_state_);
 }
 
-void nvwal_wait_for_fsync_start(struct NvwalContext* wal) {
-  nvwal_impl_thread_state_wait_for_start(&wal->fsyncer_thread_state_);
-}
-
 nvwal_error_t nvwal_flusher_main(
   struct NvwalContext* wal) {
-  uint32_t cur_writer_id;
-  nvwal_error_t error_code;
-
-  error_code = 0;
+  nvwal_error_t error_code = 0;
   uint8_t* const thread_state = &wal->flusher_thread_state_;
 
   enum NvwalThreadState state
@@ -224,29 +237,16 @@ nvwal_error_t nvwal_flusher_main(
 
   while (1) {
     sched_yield();
+    assert((*thread_state) == kNvwalThreadStateRunning
+      || (*thread_state) == kNvwalThreadStateRunningAndRequestedStop);
     /** doesn't have to be seq_cst, and this code runs very frequently */
     if (nvwal_atomic_load_acquire(thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
       break;
     }
 
-    /* Look for work */
-    for (cur_writer_id = 0; cur_writer_id < wal->config_.writer_count_; ++cur_writer_id) {
-      error_code = flush_one_writer_to_nv(wal->writers_ + cur_writer_id);
-      if (error_code) {
-        break;
-      }
-      /* Ensure writes are durable in NVM */
-      /* pmem_drain(); */
-
-      /* Some kind of metadata commit, we could use libpmemlog.
-        * This needs to track which epochs are durable, what's on disk
-        * etc. */
-      //commit_metadata_updates(wal)
-
-      /** Promptly react when obvious. but no need to be atomic read. */
-      if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
-        break;
-      }
+    error_code = flusher_main_loop(wal);
+    if (error_code) {
+      break;
     }
   }
   nvwal_impl_thread_state_stopped(thread_state);
@@ -254,14 +254,206 @@ nvwal_error_t nvwal_flusher_main(
   return error_code;
 }
 
+nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
+  uint8_t* const thread_state = &wal->flusher_thread_state_;
+  /**
+   * We currently take a simple policy; always write out logs in DE+1.
+   * As far as there is a log in this epoch, it's always correct to write them out.
+   * The only drawback is that we might waste bandwidth for a short period while
+   * we have already written out all logs in DE+1 and SE==DE+1.
+   * In such a case, it's okay to start writing out DE+2 before
+   * we bump up DE. But, it complicates the logics here.
+   * Let's keep it simple & stupid for now.
+   */
+  const nvwal_epoch_t target_epoch
+    = nvwal_increment_epoch(wal->durable_epoch_);
+  const uint8_t is_stable_epoch = (target_epoch == wal->stable_epoch_);
+
+  /* Look for work */
+  for (uint32_t cur_writer_id = 0;
+        cur_writer_id < wal->config_.writer_count_;
+        ++cur_writer_id) {
+    nvwal_error_t error_code = flusher_copy_one_writer_to_nv(
+      wal->writers_ + cur_writer_id,
+      target_epoch,
+      is_stable_epoch);
+    if (error_code) {
+      return error_code;
+    }
+    /* Ensure writes are durable in NVM */
+    /* pmem_drain(); */
+
+    /* Some kind of metadata commit, we could use libpmemlog.
+      * This needs to track which epochs are durable, what's on disk
+      * etc. */
+    //commit_metadata_updates(wal)
+
+    /** Promptly react when obvious. but no need to be atomic read. */
+    if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
+      break;
+    }
+  }
+
+  return 0;
+}
+
+nvwal_error_t flusher_copy_one_writer_to_nv(
+  struct NvwalWriterContext * writer,
+  nvwal_epoch_t target_epoch,
+  uint8_t is_stable_epoch) {
+  struct NvwalContext* const wal = writer->parent_;
+
+  /**
+   * First, we need to figure out what is the frame of the writer
+   * we should copy from.
+   * After this loop, lower_bound_f will be the first frame (from oldest_frame)
+   * whose epoch is not older than target_epoch.
+   */
+  int lower_bound_f;
+  for (lower_bound_f = 0; lower_bound_f < kNvwalEpochFrameCount; ++lower_bound_f) {
+    const int frame_index = writer->oldest_frame_ + lower_bound_f;
+    struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
+    nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
+    if (frame_epoch == kNvwalInvalidEpoch
+      || nvwal_is_epoch_equal_or_after(target_epoch, frame_epoch)) {
+      break;
+    }
+  }
+  if (lower_bound_f == kNvwalEpochFrameCount) {
+    return 0;  /** No frame in target epoch or newer. Probably an idle writer */
+  }
+
+  const int frame_index = writer->oldest_frame_ + lower_bound_f;
+  struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
+  nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
+  if (frame_epoch == kNvwalInvalidEpoch
+    || nvwal_is_epoch_after(target_epoch, frame_epoch)) {
+    return 0;  /** It's too new. Or target_epoch logs don't exist. Skip. */
+  }
+
+  assert(target_epoch == frame_epoch);
+  const uint64_t segment_size = wal->config_.segment_size_;
+  const uint64_t writer_buffer_size = wal->config_.writer_buffer_size_;
+  while (1) {  /** Until we write out all logs in this frame */
+    const uint32_t segment_index = wal->cur_seg_idx_;
+    struct NvwalLogSegment* cur_segment = wal->segments_ + segment_index;
+
+    /** We read the markers, then the data. Must prohibit reordering */
+    const uint64_t head = nvwal_atomic_load_acquire(&frame->head_offset_);
+    const uint64_t tail = nvwal_atomic_load_acquire(&frame->tail_offset_);
+
+    const uint64_t distance = calculate_writer_offset_distance(writer, head, tail);
+    assert(distance);  /** Then why this frame still exists?? */
+
+    assert(cur_segment->written_bytes_ <= segment_size);
+    const uint64_t writable_bytes = cur_segment->written_bytes_ - segment_size;
+    const uint64_t copied_bytes = NVWAL_MIN(writable_bytes, distance);
+
+    /** The following memcpy must not be reordered */
+    nvwal_atomic_thread_fence(nvwal_memory_order_acquire);
+    nvwal_circular_memcpy(
+      cur_segment->nv_baseaddr_ + cur_segment->written_bytes_,
+      writer->buffer_,
+      writer_buffer_size,
+      head,
+      copied_bytes);
+
+    uint64_t new_head = wrap_writer_offset(writer, head + copied_bytes);
+    if (new_head == tail && is_stable_epoch) {
+      /** This frame is done! */
+      nvwal_atomic_store(&writer->oldest_frame_, wrap_writer_epoch_frame(frame_index + 1));
+    } else {
+      /** This frame might receive more logs. We just remember the new head */
+      /** Not atomic because only flusher reads/writes head.. except init */
+      frame->head_offset_ = new_head;
+    }
+
+    cur_segment->written_bytes_ += copied_bytes;
+    if (cur_segment->written_bytes_ == segment_size) {
+      /* The segment is full. Move on to next, and also let the fsyncer know */
+      nvwal_error_t error_code = flusher_move_onto_next_nv_segment(wal);
+      if (error_code) {
+        return error_code;
+      }
+      assert(segment_index != wal->cur_seg_idx_);
+      continue;
+    } else if (copied_bytes == distance) {
+      break;
+    }
+  }
+
+  return 0;
+}
+
+
+nvwal_error_t flusher_move_onto_next_nv_segment(
+  struct NvwalContext* wal) {
+  struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
+  assert(cur_segment->written_bytes_ == wal->config_.segment_size_);
+  assert(cur_segment->fsync_requested_ == 0);
+  assert(cur_segment->fsync_error_ == 0);
+  assert(cur_segment->fsync_completed_ == 0);
+
+  nvwal_atomic_store(&cur_segment->fsync_requested_, 1U);  /** Signal to fsyncer */
+
+  uint32_t new_index = wal->cur_seg_idx_ + 1;
+  if (new_index == wal->config_.segment_size_) {
+    new_index = 0;
+  }
+
+  /**
+   * Now, we need to recycle this segment. this might involve a wait if
+   * we haven't copied it to disk, or epoch-cursor is now reading from this segment.
+   */
+  struct NvwalLogSegment* new_segment = wal->segments_ + new_index;
+  while (!nvwal_atomic_load_acquire(&new_segment->fsync_completed_)) {
+    /** Should be rare! not yet copied to disk */
+    sched_yield();
+    nvwal_error_t fsync_error = nvwal_atomic_load_acquire(&new_segment->fsync_error_);
+    if (fsync_error) {
+      /** This is critical. fsyncher for some reason failed. */
+      return fsync_error;
+    }
+  }
+
+  /** TODO check if any epoch-cursor is now reading from this */
+
+  /** Ok, let's recycle */
+  new_segment->dsid_ = wal->largest_dsid_ + 1;
+  wal->largest_dsid_ = new_segment->dsid_;
+  new_segment->written_bytes_ = 0;
+  new_segment->fsync_completed_ = 0;
+  new_segment->fsync_error_ = 0;
+  new_segment->fsync_requested_ = 0;
+
+  /** No need to be atomic. only flusher reads/writes it */
+  wal->cur_seg_idx_ = new_index;
+  return 0;
+}
+
+
+/**************************************************************************
+ *
+ *  Fsyncer
+ *
+ ***************************************************************************/
+
+/**
+ * Fsyncer calls this to durably copy one segment to disk.
+ * On-disk file descriptor is completely contained in this method.
+ * This method opens, uses, and closes the FD without leaving anything.
+ */
+nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment);
+
+void nvwal_wait_for_fsync_start(struct NvwalContext* wal) {
+  nvwal_impl_thread_state_wait_for_start(&wal->fsyncer_thread_state_);
+}
+
 nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
   uint32_t cur_segment;
-  nvwal_error_t error_code;
-  struct NvwalLogSegment* segment;
-
   uint8_t* const thread_state = &wal->fsyncer_thread_state_;
 
-  error_code = 0;
+  nvwal_error_t error_code = 0;
   enum NvwalThreadState state
     = nvwal_impl_thread_state_try_start(thread_state);
   if (state != kNvwalThreadStateRunning) {
@@ -272,15 +464,17 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
   while (1) {
     sched_yield();
+    assert((*thread_state) == kNvwalThreadStateRunning
+      || (*thread_state) == kNvwalThreadStateRunningAndRequestedStop);
     /** doesn't have to be seq_cst, and this code runs very frequently */
     if (nvwal_atomic_load_acquire(thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
       break;
     }
 
     for (cur_segment = 0; cur_segment < wal->segment_count_; ++cur_segment) {
-      segment = wal->segments_ + cur_segment;
+      struct NvwalLogSegment* segment = wal->segments_ + cur_segment;
       if (nvwal_atomic_load_acquire(&(segment->fsync_requested_))) {
-        error_code = sync_one_segment_to_disk(wal->segments_ + cur_segment);
+        error_code = fsyncer_sync_one_segment_to_disk(wal->segments_ + cur_segment);
         if (error_code) {
           break;
         }
@@ -298,7 +492,7 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 }
 
 
-nvwal_error_t sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
+nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
   nvwal_error_t ret;
   int disk_fd;
   char disk_path[kNvwalMaxPathLength];
@@ -363,12 +557,6 @@ error_return:
   errno = ret;
   segment->fsync_error_ = ret;
   return ret;
-}
-
-
-nvwal_error_t flush_one_writer_to_nv(
-  struct NvwalWriterContext * writer) {
-  return 0;
 }
 
 /**************************************************************************

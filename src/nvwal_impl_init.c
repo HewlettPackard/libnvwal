@@ -134,8 +134,7 @@ void nvwal_impl_thread_state_stopped(uint8_t* thread_state) {
 /** subroutine of nvwal_init() used to create fresh new segment, not during restart */
 nvwal_error_t init_fresh_nvram_segment(
   struct NvwalContext * wal,
-  struct NvwalLogSegment* segment,
-  nvwal_dsid_t dsid);
+  struct NvwalLogSegment* segment);
 
 void remove_trailing_slash(char* path, uint16_t* len) {
   while ((*len) > 0 && path[(*len) - 1] == '/') {
@@ -149,8 +148,6 @@ nvwal_error_t nvwal_impl_init(
   struct NvwalContext* wal) {
   struct NvwalWriterContext* writer;
   struct NvwalConfig* config;
-  nvwal_dsid_t resuming_dsid;
-
   /** otherwise the following memzero will also reset config, ouch */
   config = &(wal->config_);
   if (config == given_config) {
@@ -242,6 +239,9 @@ nvwal_error_t nvwal_impl_init(
     writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
   }
 
+  /** TODO we must retrieve this from MDS in restart case */
+  wal->largest_dsid_ = 0;
+
   /**
    * From now on, error-return might have to release a few things.
    * Invoke nvwal_uninit on error-return.
@@ -258,10 +258,9 @@ nvwal_error_t nvwal_impl_init(
   }
 
   /* Initialize all nv segments */
-  resuming_dsid = 0 + 1;  /** TODO we should retrieve from MDS in restart case */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
     memset(wal->segments_, 0, sizeof(struct NvwalLogSegment));
-    ret = init_fresh_nvram_segment(wal, wal->segments_ + i, resuming_dsid + i);
+    ret = init_fresh_nvram_segment(wal, wal->segments_ + i);
     if (ret) {
       goto error_return;
     }
@@ -293,22 +292,21 @@ error_return:
 
 nvwal_error_t init_fresh_nvram_segment(
   struct NvwalContext* wal,
-  struct NvwalLogSegment* segment,
-  nvwal_dsid_t dsid) {
+  struct NvwalLogSegment* segment) {
   char nv_path[kNvwalMaxPathLength];
 
-  assert(dsid != kNvwalInvalidDsid);
   assert(wal->config_.nv_root_len_ + 32U < kNvwalMaxPathLength);
+  segment->dsid_ = wal->largest_dsid_ + 1;
+  wal->largest_dsid_ = segment->dsid_;
   segment->nv_fd_ = 0;
   segment->nv_baseaddr_ = 0;
 
   segment->parent_ = wal;
-  segment->dsid_ = dsid;
 
   nvwal_concat_sequence_filename(
     wal->config_.nv_root_,
     "nv_segment_",
-    dsid,
+    segment->dsid_,
     nv_path);
 
   segment->nv_fd_ = nvwal_open_best_effort_o_direct(
@@ -328,12 +326,6 @@ nvwal_error_t init_fresh_nvram_segment(
     /** posix_fallocate doesn't set errno, do it ourselves */
     errno = EINVAL;
     return EINVAL;
-  }
-
-  if (ftruncate(segment->nv_fd_, wal->config_.segment_size_)) {
-    /** Failed to set the file length! */
-    assert(errno);
-    return errno;
   }
 
   if (fsync(segment->nv_fd_)) {
@@ -397,25 +389,22 @@ nvwal_error_t nvwal_impl_uninit(
 }
 
 nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
-  nvwal_error_t ret;  /* last-seen error code */
-
-  ret = 0;
-
+  nvwal_error_t last_seen_error = 0;
   if (segment->nv_baseaddr_ && segment->nv_baseaddr_ != MAP_FAILED) {
     if (munmap(segment->nv_baseaddr_, segment->parent_->config_.segment_size_) == -1) {
-      ret = nvwal_stock_error_code(ret, errno);
+      last_seen_error = nvwal_stock_error_code(last_seen_error, errno);
     }
   }
   segment->nv_baseaddr_ = 0;
 
   if (segment->nv_fd_ && segment->nv_fd_ != -1) {
     if (close(segment->nv_fd_) == -1) {
-      ret = nvwal_stock_error_code(ret, errno);
+      last_seen_error = nvwal_stock_error_code(last_seen_error, errno);
     }
   }
   segment->nv_fd_ = 0;
 
   memset(segment, 0, sizeof(struct NvwalLogSegment));
 
-  return ret;
+  return last_seen_error;
 }

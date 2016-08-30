@@ -71,8 +71,12 @@ void nvwal_concat_sequence_filename(
   memcpy(out, folder, folder_len);
   out_len = folder_len;
 
-  out[out_len] = '/';
-  ++out_len;
+  if (folder_len == 0) {
+    /* No folder specified. Probably not a good practice, but we tolerate it */
+  } else if (folder[folder_len - 1] != '/') {
+    out[out_len] = '/';
+    ++out_len;
+  }
 
   memcpy(out + out_len, file_prefix, file_prefix_len);
   out_len += file_prefix_len;
@@ -137,5 +141,27 @@ nvwal_error_t nvwal_open_and_fsync(const char* path) {
 
   close(fd);
   return 0;
+}
+
+void nvwal_circular_memcpy(
+  nvwal_byte_t* dest,
+  const nvwal_byte_t* circular_src_base,
+  uint64_t circular_src_size,
+  uint64_t circular_src_cur_offset,
+  uint64_t bytes_to_copy) {
+  assert(circular_src_size >= circular_src_cur_offset);
+  assert(circular_src_size >= bytes_to_copy);
+  if (circular_src_cur_offset + bytes_to_copy >= circular_src_size) {
+    /** We need a wrap-around */
+    uint64_t bytes = circular_src_size - circular_src_cur_offset;
+    if (bytes) {
+      memcpy(dest, circular_src_base + circular_src_cur_offset, bytes);
+      dest += bytes;
+      bytes_to_copy -= bytes;
+    }
+    circular_src_cur_offset = 0;
+  }
+
+  memcpy(dest, circular_src_base + circular_src_cur_offset, bytes_to_copy);
 }
 
