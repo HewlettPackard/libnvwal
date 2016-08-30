@@ -47,6 +47,12 @@ nvwal_error_t nvwal_uninit(
   return nvwal_impl_uninit(wal);
 }
 
+nvwal_error_t nvwal_query_durable_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t* out) {
+  *out = nvwal_atomic_load(&wal->durable_epoch_);
+  return 0;
+}
 
 /**************************************************************************
  *
@@ -315,7 +321,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
     struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
     nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
     if (frame_epoch == kNvwalInvalidEpoch
-      || nvwal_is_epoch_equal_or_after(target_epoch, frame_epoch)) {
+      || nvwal_is_epoch_equal_or_after(frame_epoch, target_epoch)) {
       break;
     }
   }
@@ -327,7 +333,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
   struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
   nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
   if (frame_epoch == kNvwalInvalidEpoch
-    || nvwal_is_epoch_after(target_epoch, frame_epoch)) {
+    || nvwal_is_epoch_after(frame_epoch, target_epoch)) {
     return 0;  /** It's too new. Or target_epoch logs don't exist. Skip. */
   }
 
@@ -754,4 +760,5 @@ nvwal_error_t consumed_epoch(
 
   return error_code; /* no error */
 }
+
 

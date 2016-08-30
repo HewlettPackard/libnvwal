@@ -34,9 +34,28 @@ extern "C" {
 #endif  /* __cplusplus */
 
 /**
- * DESCRIBE ME.
- * @param[in] config DESCRIBE ME
- * @param[out] wal DESCRIBE ME
+ * @brief Initializes a WAL instance.
+ * @param[in] config the configurations for this WAL instance.
+ * This object must \b NOT be pointing to wal->config.
+ * @param[out] wal The WAL instance to initialize.
+ * @details
+ * To use libnvwal, you must first call this API to initialize
+ * your WAL instance.
+ * Followings are the typical procedure to use libnvwal.
+ * @code{.c}
+ * struct NvwalConfig my_config;
+ * ... Put configuration values onto my_config
+ * struct NvwalContext my_wal;
+ * if (nvwal_init(&my_config, &my_wal)) {
+ *    ... some error happened! check errno
+ * }
+ * ... Launch a thread for flusher and fsyncer. see nvwal_fsync_main/nvwal_flusher_main.
+ * struct NvwalWriterContext* my_writer = &my_wal.writers_[writer_index];
+ * ... Write out logs for my_writer
+ * nvwal_uninit(&my_wal)
+ * @endcode
+ * @return Error code if initialization fails. Iff the initialization fails,
+ * you don't have to call nvwal_uninit().
  */
 nvwal_error_t nvwal_init(
   const struct NvwalConfig* config,
@@ -52,6 +71,8 @@ nvwal_error_t nvwal_init(
  * some error. The return value is thus the last error we observed.
  * In case there are many issues happening, it might not be the
  * root cause.
+ * @attention Make sure you call nvwal_uninit() after nvwal_init().
+ * Otherwise it cannot release the resources or do a clean shutup.
  */
 nvwal_error_t nvwal_uninit(
   struct NvwalContext* wal);
@@ -69,6 +90,19 @@ nvwal_error_t nvwal_uninit(
  * themselves, rather than launching it ourselves.
  * This allows libnvwal to be agnostic to threading model and threading library
  * used in the client application.
+ *
+ *
+ * Below is a typical code in C++11 (for easier read) to invoke this method.
+ * Note, error-code check and a few other good-practices are omitted below
+ * for easier read.
+ * @code{.cpp}
+ * struct NvwalContext* const wal = ...;
+ * std::thread flusher([wal](){ nvwal_flusher_main(wal); }
+ * std::thread fsyncer([wal](){ nvwal_fsync_main(wal); }
+ * nvwal_wait_for_flusher_start(wal);
+ * nvwal_wait_for_fsync_start(wal);
+ * ...
+ * @endcode
  *
  * @attention The calling thread will \b block until nvwal_uninit() is invoked,
  * or returns an error for whatever reason.
@@ -149,7 +183,8 @@ uint8_t nvwal_has_enough_writer_space(
   struct NvwalWriterContext* writer);
 
 /**
- * DESCRIBE ME.
+ * @returns Current Durable Epoch (DE) of this WAL instance.
+ * @see nvwal_epoch_t
  */
 nvwal_error_t nvwal_query_durable_epoch(
   struct NvwalContext* wal,
