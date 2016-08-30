@@ -71,8 +71,12 @@ void nvwal_concat_sequence_filename(
   memcpy(out, folder, folder_len);
   out_len = folder_len;
 
-  out[out_len] = '/';
-  ++out_len;
+  if (folder_len == 0) {
+    /* No folder specified. Probably not a good practice, but we tolerate it */
+  } else if (folder[folder_len - 1] != '/') {
+    out[out_len] = '/';
+    ++out_len;
+  }
 
   memcpy(out + out_len, file_prefix, file_prefix_len);
   out_len += file_prefix_len;

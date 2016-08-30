@@ -79,6 +79,46 @@ TEST(NvwalUtilTest, CircularMemcpyWrap) {
   }
 }
 
+TEST(NvwalUtilTest, ConcatSequenceFilename) {
+  char path[kNvwalMaxPathLength];
+  std::memset(path, 0, sizeof(path));
+
+  nvwal_concat_sequence_filename(
+    "/hoge/foo/boo",
+    "bar_",
+    0x7BU,
+    path);
+  EXPECT_STREQ("/hoge/foo/boo/bar_0000007B", path);
+
+  nvwal_concat_sequence_filename(
+    "/",
+    "bar_",
+    0x7BU,
+    path);
+  EXPECT_STREQ("/bar_0000007B", path);
+
+  nvwal_concat_sequence_filename(
+    "/hoge/foo/boo/",
+    "bar_",
+    0x3F0AEU,
+    path);
+  EXPECT_STREQ("/hoge/foo/boo/bar_0003F0AE", path);
+
+  nvwal_concat_sequence_filename(
+    "/",
+    "bar_",
+    0x3F0AEU,
+    path);
+  EXPECT_STREQ("/bar_0003F0AE", path);
+
+  nvwal_concat_sequence_filename(
+    "",
+    "bar_",
+    0x3F0AEU,
+    path);
+  EXPECT_STREQ("bar_0003F0AE", path);
+}
+
 }  // namespace nvwaltest
 
 TEST_MAIN_CAPTURE_SIGNALS(NvwalUtilTest);

@@ -81,15 +81,16 @@ nvwal_error_t nvwal_uninit(
 nvwal_error_t nvwal_flusher_main(
   struct NvwalContext* wal);
 /**
- * Wait until the flusher thread starts joins the context and starts working.
+ * Wait until the flusher thread joins the context and starts working.
  * The client application can \e optionally invoke this method
  * after nvwal_init() and launching its own threads to call nvwal_flusher_main().
  * This method exists because occassionally the flusher thread might take long
  * time to be launched, giving some surprise. For example worker threads started
  * running but flusher hasn't been doing its job, or furthermore the main
  * thread exits before flusher thread even starts.
- * By invoking this method, the client application make sure the flusher thread
+ * By invoking this method, the client application can make sure the flusher thread
  * has already started and joined.
+ * Probably it's a good habit to call this, but not mandatory.
  */
 void nvwal_wait_for_flusher_start(
   struct NvwalContext* wal);
