@@ -455,8 +455,7 @@ struct NvwalLogSegment {
   nvwal_byte_t* nv_baseaddr_;
 
   /**
-   * When this segment is populated and then copied to disk,
-   * this will be the ID of the disk-resident segment.
+   * ID of the disk-resident segment.
    * This is bumped up without race when the segment object is recycled for next use.
    */
   nvwal_dsid_t dsid_;
@@ -480,6 +479,12 @@ struct NvwalLogSegment {
    * If fsyncer had any error while copying this segment to disk, the error code.
    */
   nvwal_error_t fsync_error_;
+
+  /**
+   * Number of bytes we copied so far. Read/Written only by flusher.
+   * Starts with zero and resets to zero when we recycle this segment.
+   */
+  uint64_t written_bytes_;
 
   /**
    * File descriptor on NVDIMM.
@@ -594,6 +599,12 @@ struct NvwalContext {
 
   /** Index into segment[] */
   uint32_t cur_seg_idx_;
+
+  /**
+   * Existing largest DSID issued so far.
+   * When we recycle a new segment next time, we will issue this number +1.
+   */
+  nvwal_dsid_t largest_dsid_;
 
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 

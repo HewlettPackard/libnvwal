@@ -80,6 +80,25 @@ nvwal_error_t nvwal_open_and_fsync(const char* path);
  */
 nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code);
 
+/**
+ * Circular-buffer-aware memcpy.
+ */
+void nvwal_circular_memcpy(
+  nvwal_byte_t* dest,
+  const nvwal_byte_t* circular_src_base,
+  uint64_t circular_src_size,
+  uint64_t circular_src_cur_offset,
+  uint64_t bytes_to_copy);
+
+/**
+ * Min/max.
+ * It's absurd to have such macro ourselves, but in pure C "whether/where min/max is"
+ * is a stupidly complicated issue in some environment.
+ * Rather we just have them here. Long live C++.
+ */
+#define NVWAL_MAX(a,b) (((a) > (b)) ? (a) : (b))
+#define NVWAL_MIN(a,b) (((a) < (b)) ? (a) : (b))
+
 /** @} */
 
 #ifdef __cplusplus
