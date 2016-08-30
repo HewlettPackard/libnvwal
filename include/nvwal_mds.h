@@ -19,7 +19,7 @@
 #ifndef NVWAL_MDS_H_
 #define NVWAL_MDS_H_
 /**
- * @file mds.h
+ * @file nvwal_mds.h
  * Function interface to a minimal metadata store for internal use by the 
  * core nvwal library. 
  * @ingroup LIBNVWAL_INTERNAL
@@ -30,6 +30,11 @@
 #include "nvwal_fwd.h"
 #include "nvwal_types.h"
 #include "nvwal_mds_types.h"
+
+#ifdef __cplusplus
+/* All interface functions must be extern-C to be used from C and C++ */
+extern "C" {
+#endif  /* __cplusplus */
 
 
 /**
@@ -82,6 +87,9 @@ nvwal_error_t mds_write_epoch(
   struct NvwalContext* wal, 
   struct MdsEpochMetadata* epoch_metadata);
 
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
 
 /** @} */
 

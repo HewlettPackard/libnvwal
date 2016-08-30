@@ -333,7 +333,11 @@ struct NvwalConfig {
    */
   nvwal_byte_t* writer_buffers_[kNvwalMaxWorkers];
 
-  /** Size of metadata store buffer page */
+  /** 
+   * Byte size of metadata store buffer page.
+   * Must be a multiple of 512.
+   * If this is 0 (not set), we automatically set kNvwalMdsPageSize.
+   */
   uint64_t mds_page_size_;
 };
 
