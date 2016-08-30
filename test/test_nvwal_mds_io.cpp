@@ -15,42 +15,29 @@
  * HP designates this particular file as subject to the "Classpath" exception
  * as provided by HP in the LICENSE.txt file that accompanied this code.
  */
+#include <gtest/gtest.h>
 
-#ifndef NVWAL_MDS_TYPES_H_
-#define NVWAL_MDS_TYPES_H_
-/**
- * @file mds.h
- * Provides typedefs/enums/structs used in mds (meta-data store).
- * @ingroup LIBNVWAL_INTERNAL
- * @addtogroup LIBNVWAL_INTERNAL
- * @{
- */
+#include <cstring>
 
-#include "nvwal_fwd.h"
-#include "nvwal_types.h"
 
+#include "nvwal_api.h"
+
+#include "nvwal_test_mds_common.hpp"
 
 /**
- * @brief Represents metadata associated with an epoch stored in the metadata store. 
- * 
- * @note This POD must equal to the NV-DIMM failure-atomic unit size, which
- * is a single cache line.
+ * @file test_nvwal_writer.cpp
+ * Test the writer piece separately.
  */
-struct MdsEpochMetadata {
-  union {
-    struct {
-      nvwal_epoch_t epoch_id_;           /**< epoch identifier */
-      nvwal_dsid_t  from_seg_id_;
-      uint32_t      from_offset_; 
-      nvwal_dsid_t  to_seg_id_;
-      uint32_t      to_off_;
-    };
-    uint64_t        u64_[8];
-  };
-};
+
+namespace nvwaltest {
+
+TEST(NvwalMdsIoTest, create)
+{
+  MdsTestContext context(1);
+//  EXPECT_EQ(0, context.init_all());
+}
 
 
+}  // namespace nvwaltest
 
-/** @} */
-
-#endif /* NVWAL_MDS_H */
+TEST_MAIN_CAPTURE_SIGNALS(NvwalMdsIoTest);

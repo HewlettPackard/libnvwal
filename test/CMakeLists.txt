@@ -29,6 +29,7 @@ include_directories(SYSTEM
 
 add_library(nvwal_test_common SHARED
   ${CMAKE_CURRENT_SOURCE_DIR}/nvwal_test_common.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/nvwal_test_mds_common.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/nvwal_stacktrace.cpp)
 target_link_libraries(nvwal_test_common tinyxml2static backtrace nvwal-shared ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
 
@@ -110,3 +111,5 @@ endfunction()
 add_nvwal_test_individual(test_nvwal_example "Test1;Test2")
 
 add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs")
+
+add_nvwal_test_individual(test_nvwal_mds_io "create")

@@ -34,11 +34,23 @@
 #include "nvwal_types.h"
 #include "nvwal_util.h"
 
+/* black swan tchaikovsky */
+
+/* 
+ * The type is defined in nvwal_mds_types.h but we do the assert check 
+ * here to ensure header files can be compiled with older C compilers 
+ */
+/* TODO: Define a constant for failure-atomic size or cacheline size */
+/* TODO: or make this a runtime check based on hardware architecture */
+static_assert(sizeof(struct MdsEpochMetadata) == 64, 
+              "Epoch metadata must match NV-DIMM failure-atomic unit size");
 
 #define ASSERT_FD_VALID(fd) assert(fd != -1)
 
 #define MDS_NVRAM_BUFFER_FILE_PREFIX  "mds-nvram-buffer-"
 #define MDS_PAGE_FILE_PREFIX          "mds-pagefile-"
+
+#include "nvwal_impl_mds.h"
 
 /*
  * QUESTIONS:
@@ -80,61 +92,6 @@
   TODO: Code should be NUMA aware
  */
 
-
-/******************************************************************************
- * Declarations for private types and functions 
- *****************************************************************************/
-
-typedef uint64_t page_offset_t;
-typedef uint64_t page_no_t;
-typedef uint64_t file_no_t;
-
-/**  
- * @brief Represents a page-file descriptor structure.
- */
-struct PageFile {
-  file_no_t file_no_;
-  int       fd_;
-};
-
-/**
- * @brief Represents a page containing epoch metadata.
- */
-struct Page {
-  struct MdsEpochMetadata epochs_[0];
-};
-
-/**
- * @brief Represents a descriptor of a buffer frame mapped on NVRAM. 
- */
-struct NvwalMdsBuffer {
-  struct PageFile* file_;
-  page_no_t        page_no_;
-  void*            baseaddr_;
-};
-
-
-/**
- * @brief Opens a page file and provides a page-file descriptor for this file.
- */
-static nvwal_error_t mds_io_open_file(
-  struct NvwalMdsContext* mds, 
-  file_no_t file_no,
-  struct PageFile** file);
-
-
-/**
- * @brief Initializes the buffer manager of the meta-data store.
- *
- * @details
- * As part of the initialization, the buffer manager remaps any NVRAM
- * buffers. However, the user is still responsible to assign NVRAM
- * buffers to the proper page file based on the recovery protocol
- * followed by the user. 
- */
-static nvwal_error_t mds_bufmgr_init(
-  const struct NvwalConfig* config, 
-  struct NvwalMdsBufferManagerContext* bufmgr);
 
 
 int strcat_s(char *dest, size_t destsz, const char* src)
@@ -207,9 +164,7 @@ error_return:
 }
 
 
-/**
- * @brief Creates a page file and provides a page-file descriptor for this file.
- *
+/*
  * FIXME: Use direct i/o
  */
 static nvwal_error_t mds_io_create_file(
@@ -256,12 +211,6 @@ error_return:
 }
 
 
-/**
- * @brief Closes a page file.
- * 
- * @details
- * Deallocates the memory associated with the page file descriptor.
- */
 static void mds_io_close_file(
   struct NvwalMdsContext* mds,
   struct PageFile* file)
@@ -658,7 +607,7 @@ nvwal_error_t mds_bufmgr_alloc_page(
  */
 static inline nvwal_epoch_t normalize_epoch_id(nvwal_epoch_t epoch_id)
 {
-  _Static_assert(kNvwalInvalidEpoch == 0, "Invalid epoch expected to be 0 but is not.");
+  static_assert(kNvwalInvalidEpoch == 0, "Invalid epoch expected to be 0 but is not.");
   return epoch_id - 1;
 }
 
