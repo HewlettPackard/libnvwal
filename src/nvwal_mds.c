@@ -131,7 +131,7 @@ static struct PageFile* alloc_page_file_desc(file_no_t file_no, int fd)
  * FIXME: Use direct i/o
  */
 nvwal_error_t mds_io_open_file(
-  struct NvwalMdsContext* mds, 
+  struct NvwalMdsIoContext* io, 
   file_no_t file_no,
   struct PageFile** file)
 {
@@ -140,7 +140,7 @@ nvwal_error_t mds_io_open_file(
   char pathname[kNvwalMaxPathLength];
   
   nvwal_concat_sequence_filename(
-    mds->config_.disk_root_,
+    io->config_.disk_root_,
     MDS_PAGE_FILE_PREFIX,
     file_no,
     pathname);
@@ -167,8 +167,8 @@ error_return:
 /*
  * FIXME: Use direct i/o
  */
-static nvwal_error_t mds_io_create_file(
-  struct NvwalMdsContext* mds, 
+nvwal_error_t mds_io_create_file(
+  struct NvwalMdsIoContext* io, 
   file_no_t file_no, 
   struct PageFile** file)
 {
@@ -177,11 +177,11 @@ static nvwal_error_t mds_io_create_file(
   char pathname[kNvwalMaxPathLength];
 
   nvwal_concat_sequence_filename(
-    mds->config_.disk_root_,
+    io->config_.disk_root_,
     MDS_PAGE_FILE_PREFIX,
     file_no,
     pathname);
-    
+   
   fd = open(pathname,
             O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
             S_IRUSR|S_IWUSR);
@@ -195,7 +195,7 @@ static nvwal_error_t mds_io_create_file(
   /* 
    * Sync the parent directory, so that the newly created (empty) file is visible.
    */
-  ret = nvwal_open_and_fsync(mds->config_.disk_root_);
+  ret = nvwal_open_and_fsync(io->config_.disk_root_);
   if (ret) {
     goto error_return;
   }
@@ -211,8 +211,8 @@ error_return:
 }
 
 
-static void mds_io_close_file(
-  struct NvwalMdsContext* mds,
+void mds_io_close_file(
+  struct NvwalMdsIoContext* io,
   struct PageFile* file)
 {
   close(file->fd_);
@@ -220,28 +220,27 @@ static void mds_io_close_file(
 }
 
 
-/**
- * @brief Initializes the I/O subsystem of the meta-data store.
- * 
- * @details
- * Opens metadata page files. If the page files do not exist, it creates them. 
- */
-static nvwal_error_t mds_io_init(struct NvwalMdsContext* mds)
+nvwal_error_t mds_io_init(
+  const struct NvwalConfig* config, 
+  struct NvwalMdsIoContext* io)
 {
   int i;
   nvwal_error_t ret;
   struct PageFile* pf;
 
+  memset(io, 0, sizeof(*io));
+  memcpy(&io->config_, config, sizeof(*config));
+
   for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    ret = mds_io_open_file(mds, i, &pf);
-    if (ret == EACCES) {
+    ret = mds_io_open_file(io, i, &pf);
+    if (ret == ENOENT) {
       /* page file does not exist; create it */
-      ret = mds_io_create_file(mds, i, &pf);
+      ret = mds_io_create_file(io, i, &pf);
       if (!ret) {
         goto error_return;
       }
     }
-    mds->active_files_[i] = pf;
+    io->active_files_[i] = pf;
   }
 
   return 0;
@@ -252,30 +251,27 @@ error_return:
 }
 
 
-/**
- * @brief Unitializes the I/O subsystem of the meta-data store.
- */
-static nvwal_error_t mds_io_uninit(struct NvwalMdsContext* mds)
+nvwal_error_t mds_io_uninit(struct NvwalMdsIoContext* io)
 {
   int i;
 
   for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    assert(mds->active_files_[i]);
-    mds_io_close_file(mds, mds->active_files_[i]);   
-    mds->active_files_[i] = NULL;
+    assert(io->active_files_[i]);
+    mds_io_close_file(io, io->active_files_[i]);   
+    io->active_files_[i] = NULL;
   }
   return 0;
 }
 
 
 static inline struct PageFile* mds_io_file(
-  struct NvwalMdsContext* mds, 
+  struct NvwalMdsIoContext* io, 
   file_no_t file_no)
 {
   if (file_no > kNvwalMdsMaxActivePagefiles - 1) {
     return NULL;
   }
-  return mds->active_files_[file_no];
+  return io->active_files_[file_no];
 }
 
 
@@ -659,12 +655,13 @@ nvwal_error_t mds_init(
   struct NvwalContext* wal) 
 {
   struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsIoContext* io = &(mds->io_);
   struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
 
   memset(mds, 0, sizeof(*mds));
   memcpy(&mds->config_, config, sizeof(*config));
 
-  mds_io_init(mds);
+  mds_io_init(config, io);
   mds_bufmgr_init(config, bufmgr);
 
   return 0;
@@ -733,7 +730,7 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
   nvwal_epoch_t latest_epoch;
 
   for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    struct PageFile* file = mds->active_files_[i];
+    struct PageFile* file = mds->io_.active_files_[i];
     struct NvwalMdsBuffer* buffer = bufmgr->write_buffers_[i];
     struct Page* page = mds_bufmgr_page(buffer);
 

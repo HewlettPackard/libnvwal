@@ -33,12 +33,21 @@
 #include <boost/filesystem.hpp>
 
 #include "nvwal_api.h"
+#include "nvwal_impl_mds.h"
 #include "nvwal_mds.h"
 #include "nvwal_stacktrace.hpp"
 #include "nvwal_types.h"
 
 namespace nvwaltest {
-nvwal_error_t MdsTestContext::init_all() {
+nvwal_error_t MdsTestContext::init_all(bool init_all, bool init_io, bool init_bufmgr) {
+  /* 
+   * Record what components we initialized so that we properly uninitialize
+   * when the destructor gets called.
+   */
+  init_all_ = init_all;
+  init_io_ = init_io;
+  init_bufmgr_ = init_bufmgr;
+
   std::string random_name = get_random_name();
   boost::filesystem::path root_path = boost::filesystem::system_complete(random_name);
   unique_root_path_ = root_path.string();
@@ -79,29 +88,49 @@ nvwal_error_t MdsTestContext::init_all() {
     std::memcpy(config.nv_root_, wal_root.string().data(), wal_root.string().length());
     config.mds_page_size_ = kNvwalMdsPageSize;
 
-    auto ret = mds_init(&config, wal);
+    nvwal_error_t ret;
+    if (init_all) {
+      ret = mds_init(&config, wal);
+    } else {
+      if (init_io) {
+        ret = mds_io_init(&config, &(wal->mds_.io_));
+      }
+      if (init_bufmgr) {
+        ret = mds_bufmgr_init(&config, &(wal->mds_.bufmgr_));
+      }
+    }
     if (ret) {
-      std::cerr << "MdsTestContext::init_all() : Fatal! failed to initialize WAL instance-"
+      std::cerr << "MdsTestContext::init_all() : Fatal! failed to initialize metadata store instance-"
         << w << ". errno=" << ret << std::endl;
       return ret;
     }
+
   }
 
   return 0;
 }
 
-nvwal_error_t MdsTestContext::uninit_all() {
+nvwal_error_t MdsTestContext::uninit_all(bool uninit_all, bool uninit_io, bool uninit_bufmgr) {
   nvwal_error_t last_error = 0;
-#if 0
   for (int w = 0; w < wal_count_; ++w) {
     auto* resource = get_resource(w);
+    auto* wal = &resource->wal_instance_;
     // Here, we assume nvwal_uninit is idempotent.
-    auto ret = nvwal_uninit(&resource->wal_instance_);
+    nvwal_error_t ret;
+    if (uninit_all) {
+      ret = mds_uninit(wal);
+    } else {
+      if (uninit_bufmgr) {
+        ret = mds_bufmgr_uninit(&wal->mds_.bufmgr_);
+      }
+      if (uninit_io) {
+        ret = mds_io_uninit(&wal->mds_.io_);
+      }
+    }
     if (ret) {
       last_error = ret;
     }
   }
-#endif
   boost::filesystem::remove_all(unique_root_path_);
   return last_error;
 }

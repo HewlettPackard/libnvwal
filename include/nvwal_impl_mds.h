@@ -27,6 +27,14 @@
  * @{
  */
 
+#include "nvwal_mds_types.h"
+
+#ifdef __cplusplus
+/* All interface functions must be extern-C to be used from C and C++ */
+extern "C" {
+#endif  /* __cplusplus */
+
+
 
 /******************************************************************************
  * Declarations for private typedefs/enums/structs
@@ -65,20 +73,32 @@ struct NvwalMdsBuffer {
  * Interface for private functions
  *****************************************************************************/
 
+/**
+ * @brief Initializes the I/O subsystem of the meta-data store.
+ * 
+ * @details
+ * Opens metadata page files. If the page files do not exist, it creates them. 
+ */
+nvwal_error_t mds_io_init(const struct NvwalConfig* config, struct NvwalMdsIoContext* io);
+
+/**
+ * @brief Unitializes the I/O subsystem of the meta-data store.
+ */
+nvwal_error_t mds_io_uninit(struct NvwalMdsIoContext* io);
 
 /**
  * @brief Opens a page file and provides a page-file descriptor for this file.
  */
-static nvwal_error_t mds_io_open_file(
-  struct NvwalMdsContext* mds, 
+nvwal_error_t mds_io_open_file(
+  struct NvwalMdsIoContext* io, 
   file_no_t file_no,
   struct PageFile** file);
 
 /**
  * @brief Creates a page file and provides a page-file descriptor for this file.
  */
-static nvwal_error_t mds_io_create_file(
-  struct NvwalMdsContext* mds, 
+nvwal_error_t mds_io_create_file(
+  struct NvwalMdsIoContext* io, 
   file_no_t file_no, 
   struct PageFile** file);
 
@@ -88,8 +108,8 @@ static nvwal_error_t mds_io_create_file(
  * @details
  * Deallocates the memory associated with the page file descriptor.
  */
-static void mds_io_close_file(
-  struct NvwalMdsContext* mds,
+void mds_io_close_file(
+  struct NvwalMdsIoContext* io,
   struct PageFile* file);
 
 
@@ -103,10 +123,21 @@ static void mds_io_close_file(
  * buffers to the proper page file based on the recovery protocol
  * followed by the user. 
  */
-static nvwal_error_t mds_bufmgr_init(
+nvwal_error_t mds_bufmgr_init(
   const struct NvwalConfig* config, 
   struct NvwalMdsBufferManagerContext* bufmgr);
 
 
+/**
+ * @brief Unitializes the buffer manager.
+ */
+nvwal_error_t mds_bufmgr_uninit(
+  struct NvwalMdsBufferManagerContext* bufmgr);
+
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
+
+/** @} */
 
 #endif /* NVWAL_IMPL_MDS_H_ */

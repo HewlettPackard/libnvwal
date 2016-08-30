@@ -34,7 +34,11 @@ namespace nvwaltest {
 TEST(NvwalMdsIoTest, create)
 {
   MdsTestContext context(1);
-//  EXPECT_EQ(0, context.init_all());
+  EXPECT_EQ(0, context.init_io());
+
+  
+
+//  EXPECT_EQ(0, context.uninit_io());
 }
 
 

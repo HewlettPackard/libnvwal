@@ -499,6 +499,20 @@ struct NvwalLogSegment {
 };
 
 /**
+ * @brief Represents a context of a meta-data-store I/O subsystem instance.
+ */
+struct NvwalMdsIoContext {
+  /** Runtime configuration parameters */
+  struct NvwalConfig config_;
+
+  /** Active (open) page files */
+  struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
+
+  /** Buffers */
+  struct NvwalMdsBuffer* write_buffers_[kNvwalMdsMaxActivePagefiles];
+};
+
+/**
  * @brief Represents a context of a meta-data-store buffer-manager instance.
  */
 struct NvwalMdsBufferManagerContext {
@@ -516,7 +530,8 @@ struct NvwalMdsContext {
   /** Runtime configuration parameters */
   struct NvwalConfig config_;
 
-  struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
+  /** IO subsystem context */
+  struct NvwalMdsIoContext io_;
 
   /** Buffer manager context */
   struct NvwalMdsBufferManagerContext bufmgr_;   

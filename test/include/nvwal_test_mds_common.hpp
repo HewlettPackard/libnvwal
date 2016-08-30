@@ -61,19 +61,47 @@ class MdsTestContext {
     : wal_count_(wal_count), sizing_(kTiny) {
   }
   ~MdsTestContext() {
-    uninit_all();
+    uninit_all(init_all_, init_io_, init_bufmgr_);
   }
 
   /**
    * Most initialization happens here. Don't forget to check the return code!
    */
-  nvwal_error_t init_all();
+  nvwal_error_t init_all(bool init_all = true, bool init_io = false, bool init_bufmgr = false);
+
+  /**
+   * Partial initialization: initialize I/O subsystem only.
+   */
+  nvwal_error_t init_io() {
+    return init_all(false, true, false);
+  }
+
+  /**
+   * Partial initialization: initialize buffer subsystem only.
+   */
+  nvwal_error_t init_bufmgr() {
+    return init_all(false, false, true);
+  }
 
   /**
    * This is idempotent and the destructor automatically calls it.
    * Still, you should call this so that you can sanity-check the return value.
    */
-  nvwal_error_t uninit_all();
+  nvwal_error_t uninit_all(bool uninit_all = true, bool uninit_io = false, bool uninit_bufmgr = false);
+
+  /**
+   * Partial initialization: initialize I/O subsystem only.
+   */
+  nvwal_error_t uninit_io() {
+    return uninit_all(false, true, false);
+  }
+
+  /**
+   * Partial initialization: initialize buffer subsystem only.
+   */
+  nvwal_error_t uninit_bufmgr() {
+    return uninit_all(false, false, true);
+  }
 
   int get_wal_count() const { return wal_count_; }
   MdsWalResource* get_resource(int wal_id) { return &wal_resources_[wal_id]; }
@@ -94,6 +122,14 @@ class MdsTestContext {
   const InstanceSize sizing_;
   std::string unique_root_path_;
   std::vector< MdsWalResource > wal_resources_;
+
+  /**
+   * Record what components we initialized so that we properly uninitialize 
+   * when the destructor gets called.
+   */
+  bool init_all_;
+  bool init_io_;
+  bool init_bufmgr_;
 };
 
 }  // namespace nvwaltest
