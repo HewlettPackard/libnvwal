@@ -261,10 +261,9 @@ enum NvwalConstants {
   kNvwalMdsMaxActivePagefiles = 1U,
 
   /**
-   * @brief Largest number of pages being buffered.
+   * @brief Largest number of pages being buffered for reading.
    */
   kNvwalMdsMaxBufferPages = 1U,
-
 };
 
 /**
@@ -333,7 +332,11 @@ struct NvwalConfig {
    */
   nvwal_byte_t* writer_buffers_[kNvwalMaxWorkers];
 
-  /** Size of metadata store buffer page */
+  /** 
+   * Byte size of metadata store buffer page.
+   * Must be a multiple of 512.
+   * If this is 0 (not set), we automatically set kNvwalMdsPageSize.
+   */
   uint64_t mds_page_size_;
 };
 
@@ -456,8 +459,7 @@ struct NvwalLogSegment {
   nvwal_byte_t* nv_baseaddr_;
 
   /**
-   * When this segment is populated and then copied to disk,
-   * this will be the ID of the disk-resident segment.
+   * ID of the disk-resident segment.
    * This is bumped up without race when the segment object is recycled for next use.
    */
   nvwal_dsid_t dsid_;
@@ -483,6 +485,12 @@ struct NvwalLogSegment {
   nvwal_error_t fsync_error_;
 
   /**
+   * Number of bytes we copied so far. Read/Written only by flusher.
+   * Starts with zero and resets to zero when we recycle this segment.
+   */
+  uint64_t written_bytes_;
+
+  /**
    * File descriptor on NVDIMM.
    * Both -1 and 0 mean an invalid descriptor.
    * When it is a valid FD, libnvwal is responsible to close it during uninit.
@@ -503,7 +511,7 @@ struct NvwalMdsBufferManagerContext {
   struct NvwalConfig config_;
 
   /** Buffers */
-  struct NvwalMdsBuffer* buffers_[kNvwalMdsMaxBufferPages];
+  struct NvwalMdsBuffer* write_buffers_[kNvwalMdsMaxActivePagefiles];
 };
 
 /**
@@ -517,6 +525,9 @@ struct NvwalMdsContext {
 
   /** Buffer manager context */
   struct NvwalMdsBufferManagerContext bufmgr_;   
+
+  /** Latest epoch */
+  nvwal_epoch_t latest_epoch_;
 };
 
 /**
@@ -594,25 +605,25 @@ struct NvwalContext {
   /** Index into segment[] */
   uint32_t cur_seg_idx_;
 
+  /**
+   * Existing largest DSID issued so far.
+   * When we recycle a new segment next time, we will issue this number +1.
+   */
+  nvwal_dsid_t largest_dsid_;
+
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 
   /**
-   * Used to inform the flusher that nvwal_uninit() was invoked.
+   * Controls the state of flusher thread.
+   * One of the values in NvwalThreadState.
    */
-  uint8_t flusher_stop_requested_;
-  /**
-   * Set when the flusher thread started running.
-   */
-  uint8_t flusher_running_;
+  uint8_t flusher_thread_state_;
 
   /**
-   * Used to inform the fsyncer that nvwal_uninit() was invoked.
+   * Controls the state of fsyncer thread.
+   * One of the values in NvwalThreadState.
    */
-  uint8_t fsyncer_stop_requested_;
-  /**
-   * Set when the fsyncer thread started running.
-   */
-  uint8_t fsyncer_running_;
+  uint8_t fsyncer_thread_state_;
 
   /**
    * Metadata store context 
