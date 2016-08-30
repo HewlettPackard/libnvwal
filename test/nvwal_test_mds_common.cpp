@@ -39,25 +39,37 @@
 #include "nvwal_types.h"
 
 namespace nvwaltest {
-nvwal_error_t MdsTestContext::init_all(bool init_all, bool init_io, bool init_bufmgr) {
+nvwal_error_t MdsTestContext::__init_internal(bool init_io, bool init_bufmgr, std::string unique_root_path, bool remove_all) 
+{
   /* 
    * Record what components we initialized so that we properly uninitialize
    * when the destructor gets called.
    */
-  init_all_ = init_all;
   init_io_ = init_io;
   init_bufmgr_ = init_bufmgr;
 
-  std::string random_name = get_random_name();
-  boost::filesystem::path root_path = boost::filesystem::system_complete(random_name);
+  bool create_all = false;
+  boost::filesystem::path root_path;
+
+  if (unique_root_path == "") {
+    std::string random_name = get_random_name();
+    root_path = boost::filesystem::system_complete(random_name);
+  } else {
+    root_path = boost::filesystem::system_complete(unique_root_path);
+  }
   unique_root_path_ = root_path.string();
 
-  boost::filesystem::remove_all(unique_root_path_);
+  if (remove_all) {
+    boost::filesystem::remove_all(unique_root_path_);
+    create_all = true;
+  }
 
-  if (!boost::filesystem::create_directories(unique_root_path_)) {
-    std::cerr << "MdsTestContext::init_all() : Fatal! failed to create the folder:"
-       << unique_root_path_ << ". Check permissions etc." << std::endl;
-    return ENOENT;
+  if (create_all) {
+    if (!boost::filesystem::create_directories(unique_root_path_)) {
+      std::cerr << "MdsTestContext::init_all() : Fatal! failed to create the folder:"
+         << unique_root_path_ << ". Check permissions etc." << std::endl;
+      return ENOENT;
+    }
   }
 
   wal_resources_.resize(wal_count_);
@@ -75,10 +87,12 @@ nvwal_error_t MdsTestContext::init_all(bool init_all, bool init_io, bool init_bu
     std::string w_str = std::to_string(w);
     boost::filesystem::path wal_root = root_path;
     wal_root /= w_str;
-    if (!boost::filesystem::create_directory(wal_root)) {
-      std::cerr << "MdsTestContext::init_all() : Fatal! failed to create the folder:"
-        << wal_root.string() << ". Check permissions etc." << std::endl;
-      return ENOENT;
+    if (create_all) {
+      if (!boost::filesystem::create_directory(wal_root)) {
+        std::cerr << "MdsTestContext::init_all() : Fatal! failed to create the folder:"
+          << wal_root.string() << ". Check permissions etc." << std::endl;
+        return ENOENT;
+      }
     }
 
     NvwalConfig config;
@@ -89,7 +103,7 @@ nvwal_error_t MdsTestContext::init_all(bool init_all, bool init_io, bool init_bu
     config.mds_page_size_ = kNvwalMdsPageSize;
 
     nvwal_error_t ret;
-    if (init_all) {
+    if (init_io && init_bufmgr) {
       ret = mds_init(&config, wal);
     } else {
       if (init_io) {
@@ -110,14 +124,14 @@ nvwal_error_t MdsTestContext::init_all(bool init_all, bool init_io, bool init_bu
   return 0;
 }
 
-nvwal_error_t MdsTestContext::uninit_all(bool uninit_all, bool uninit_io, bool uninit_bufmgr) {
+nvwal_error_t MdsTestContext::__uninit_internal(bool uninit_io, bool uninit_bufmgr, bool remove_all) {
   nvwal_error_t last_error = 0;
   for (int w = 0; w < wal_count_; ++w) {
     auto* resource = get_resource(w);
     auto* wal = &resource->wal_instance_;
-    // Here, we assume nvwal_uninit is idempotent.
+    // Here, we assume uninit methods are idempotent.
     nvwal_error_t ret;
-    if (uninit_all) {
+    if (uninit_bufmgr && uninit_io) {
       ret = mds_uninit(wal);
     } else {
       if (uninit_bufmgr) {
@@ -131,7 +145,9 @@ nvwal_error_t MdsTestContext::uninit_all(bool uninit_all, bool uninit_io, bool u
       last_error = ret;
     }
   }
-  boost::filesystem::remove_all(unique_root_path_);
+  if (remove_all) {
+    boost::filesystem::remove_all(unique_root_path_);
+  }
   return last_error;
 }
 

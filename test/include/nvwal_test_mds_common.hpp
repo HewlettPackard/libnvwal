@@ -61,51 +61,57 @@ class MdsTestContext {
     : wal_count_(wal_count), sizing_(kTiny) {
   }
   ~MdsTestContext() {
-    uninit_all(init_all_, init_io_, init_bufmgr_);
+    __uninit_internal(init_io_, init_bufmgr_, true);
   }
 
   /**
-   * Most initialization happens here. Don't forget to check the return code!
+   * Complete initialization. Don't forget to check the return code!
    */
-  nvwal_error_t init_all(bool init_all = true, bool init_io = false, bool init_bufmgr = false);
+  nvwal_error_t init_all(std::string root_path = "", bool remove_all = true) {
+    return __init_internal(true, true, root_path, remove_all);
+  }
 
   /**
    * Partial initialization: initialize I/O subsystem only.
    */
-  nvwal_error_t init_io() {
-    return init_all(false, true, false);
+  nvwal_error_t init_io(std::string root_path = "", bool remove_all = true) {
+    return __init_internal(true, false, root_path, remove_all);
   }
 
   /**
    * Partial initialization: initialize buffer subsystem only.
    */
-  nvwal_error_t init_bufmgr() {
-    return init_all(false, false, true);
+  nvwal_error_t init_bufmgr(std::string root_path = "", bool remove_all = true) {
+    return __init_internal(false, true, root_path, remove_all);
+  }
+
+  /**
+   * Most initialization happens here. Don't forget to check the return code!
+   */
+  nvwal_error_t __init_internal(bool init_io, bool init_bufmgr, std::string root_path, bool remove_all);
+
+  nvwal_error_t uninit_all(bool remove_all = true) {
+    return __uninit_internal(true, true, remove_all);
+  }
+
+  nvwal_error_t uninit_io(bool remove_all = true) {
+    return __uninit_internal(true, false, remove_all);
+  }
+
+  nvwal_error_t uninit_bufmgr(bool remove_all = true) {
+    return __uninit_internal(false, true, remove_all);
   }
 
   /**
    * This is idempotent and the destructor automatically calls it.
    * Still, you should call this so that you can sanity-check the return value.
    */
-  nvwal_error_t uninit_all(bool uninit_all = true, bool uninit_io = false, bool uninit_bufmgr = false);
-
-  /**
-   * Partial initialization: initialize I/O subsystem only.
-   */
-  nvwal_error_t uninit_io() {
-    return uninit_all(false, true, false);
-  }
-
-  /**
-   * Partial initialization: initialize buffer subsystem only.
-   */
-  nvwal_error_t uninit_bufmgr() {
-    return uninit_all(false, false, true);
-  }
+  nvwal_error_t __uninit_internal(bool uninit_io, bool uninit_bufmgr, bool remove_all);
 
   int get_wal_count() const { return wal_count_; }
   MdsWalResource* get_resource(int wal_id) { return &wal_resources_[wal_id]; }
   NvwalContext* get_wal(int wal_id) { return &wal_resources_[wal_id].wal_instance_; }
+  std::string get_root_path() { return unique_root_path_; }
 
  private:
   MdsTestContext(const MdsTestContext&) = delete;
@@ -127,7 +133,6 @@ class MdsTestContext {
    * Record what components we initialized so that we properly uninitialize 
    * when the destructor gets called.
    */
-  bool init_all_;
   bool init_io_;
   bool init_bufmgr_;
 };

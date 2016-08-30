@@ -112,4 +112,4 @@ add_nvwal_test_individual(test_nvwal_example "Test1;Test2")
 
 add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs")
 
-add_nvwal_test_individual(test_nvwal_mds_io "create")
+add_nvwal_test_individual(test_nvwal_mds_io "Init;AppendPage")
