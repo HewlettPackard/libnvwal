@@ -44,6 +44,7 @@ void write_epoch_batch(struct NvwalContext* wal, nvwal_epoch_t low, nvwal_epoch_
 {
   struct MdsEpochMetadata epoch;
   for (int i=low; i<=high; i++) {
+    memset(&epoch, 0, sizeof(epoch));
     epoch.epoch_id_ = i;
     EXPECT_EQ(0, mds_write_epoch(wal, &epoch));
   }
