@@ -23,6 +23,7 @@
 #include "nvwal_api.h"
 
 #include "nvwal_test_mds_common.hpp"
+#include "nvwal_impl_mds.h"
 
 /**
  * @file test_nvwal_writer.cpp
@@ -31,12 +32,33 @@
 
 namespace nvwaltest {
 
-TEST(NvwalMdsIoTest, create)
+TEST(NvwalMdsIoTest, Init)
 {
   MdsTestContext context(1);
-//  EXPECT_EQ(0, context.init_all());
+  EXPECT_EQ(0, context.init_io());
+  EXPECT_EQ(0, context.uninit_io());
 }
 
+TEST(NvwalMdsIoTest, AppendPage)
+{
+  MdsTestContext context(1);
+  EXPECT_EQ(0, context.init_io());
+
+  NvwalContext* wal = context.get_wal(0);
+  struct PageFile* file = mds_io_file(&wal->mds_.io_, 0);
+  void* pagebuf = malloc(wal->mds_.io_.config_.mds_page_size_);
+  ASSERT_NE((void*) NULL, pagebuf);
+  mds_io_append_page(file, pagebuf);
+
+  free(pagebuf);
+
+  std::string root_path = context.get_root_path();
+  EXPECT_EQ(0, context.uninit_io(false));
+
+  /* test recovery code path */
+  EXPECT_EQ(0, context.init_io(root_path, false));
+  EXPECT_EQ(0, context.uninit_io());
+}
 
 }  // namespace nvwaltest
 
