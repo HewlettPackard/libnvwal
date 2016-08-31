@@ -53,7 +53,6 @@ nvwal_error_t mds_init(
   const struct NvwalConfig* config, 
   struct NvwalContext* wal);
 
-
 /**
  * @brief Performs recovery of the metadata store. 
  *
@@ -64,14 +63,12 @@ nvwal_error_t mds_init(
  */
 nvwal_error_t mds_recover(struct NvwalContext* wal);
 
-
 /**
  * @brief Uninitializes the metadata store.
  *
  * @param[in] wal nvwal context 
  */
 nvwal_error_t mds_uninit(struct NvwalContext* wal);
-
 
 /**
  * @brief Writes epoch \a epoch_metadata.
@@ -86,6 +83,14 @@ nvwal_error_t mds_uninit(struct NvwalContext* wal);
 nvwal_error_t mds_write_epoch(
   struct NvwalContext* wal, 
   struct MdsEpochMetadata* epoch_metadata);
+
+/**
+ * @brief Returns identifier of latest durable epoch. 
+ *
+ * @param[in] wal nvwal context 
+ */
+nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal);
+
 
 #ifdef __cplusplus
 }
