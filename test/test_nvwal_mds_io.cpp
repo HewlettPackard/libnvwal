@@ -26,8 +26,8 @@
 #include "nvwal_impl_mds.h"
 
 /**
- * @file test_nvwal_writer.cpp
- * Test the writer piece separately.
+ * @file test_nvwal_mds_io.cpp
+ * Test the I/O subsystem of the metadata store separately.
  */
 
 namespace nvwaltest {
@@ -47,6 +47,7 @@ TEST(NvwalMdsIoTest, AppendPage)
   NvwalContext* wal = context.get_wal(0);
   struct PageFile* file = mds_io_file(&wal->mds_.io_, 0);
   void* pagebuf = malloc(wal->mds_.io_.config_.mds_page_size_);
+  memset(pagebuf, 0, wal->mds_.io_.config_.mds_page_size_);
   ASSERT_NE((void*) NULL, pagebuf);
   mds_io_append_page(file, pagebuf);
 
