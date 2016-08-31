@@ -133,6 +133,11 @@ nvwal_error_t TestContext::uninit_all() {
 
 
 void WalResource::launch_flusher() {
+  flusher_ = std::move(std::thread(
+    [this](){
+      this->flusher_exit_code_ = nvwal_flusher_main(&this->wal_instance_);
+    }
+  ));
   nvwal_wait_for_flusher_start(&wal_instance_);
 }
 
