@@ -265,12 +265,16 @@ nvwal_error_t nvwal_impl_init(
     }
   }
 
-  /* Created files on NVDIMM/Disk, fsync parent directory */
-  ret = nvwal_open_and_fsync(config->nv_root_);
+  /*
+   * Created files on NVDIMM/Disk, sync everything in filesystem level.
+   * This is more efficient than individual, lots of fsync.
+   * We thus don't invoke fsync() in each init_fresh_nvram_segment.
+   */
+  ret = nvwal_open_and_syncfs(config->nv_root_);
   if (ret) {
     goto error_return;
   }
-  ret = nvwal_open_and_fsync(config->disk_root_);
+  ret = nvwal_open_and_syncfs(config->disk_root_);
   if (ret) {
     goto error_return;
   }
@@ -327,12 +331,6 @@ nvwal_error_t init_fresh_nvram_segment(
     return EINVAL;
   }
 
-  if (fsync(segment->nv_fd_)) {
-    /** Failed to fsync! */
-    assert(errno);
-    return errno;
-  }
-
   /**
    * Don't bother (non-transparent) huge pages. Even libpmem doesn't try it.
    */
@@ -355,6 +353,15 @@ nvwal_error_t init_fresh_nvram_segment(
    */
   memset(segment->nv_baseaddr_, 0, wal->config_.segment_size_);
   msync(segment->nv_baseaddr_, wal->config_.segment_size_, MS_SYNC);
+
+  /** To speed up start up, we don't do fsync here.
+  We rather do syncfs at the end.
+  if (fsync(segment->nv_fd_)) {
+    assert(errno);
+    return errno;
+  }
+  */
+
   return 0;
 }
 

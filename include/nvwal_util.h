@@ -76,6 +76,14 @@ int nvwal_open_best_effort_o_direct(
 nvwal_error_t nvwal_open_and_fsync(const char* path);
 
 /**
+ * Another convenience method to do open(), syncfs(), then close().
+ * This is useful when we need a durabiliry barrier after several file writes and
+ * individual fsync is a bit wasteful.
+ * For more details, check man syncfs.
+ */
+nvwal_error_t nvwal_open_and_syncfs(const char* path);
+
+/**
  * @returns Whether the given path represents a valid folder with at least one child.
  * Returns 0 in all other cases, including the folder doesn't exist, any I/O error.
  */

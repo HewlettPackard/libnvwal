@@ -123,26 +123,39 @@ int nvwal_open_best_effort_o_direct(
 }
 
 nvwal_error_t nvwal_open_and_fsync(const char* path) {
-  nvwal_error_t ret;
-  int fd;
-
-  fd = open(path, 0, 0);
+  int fd = open(path, 0, 0);
   if (fd == -1) {
     return errno;
   }
 
   assert(fd);
 
-  ret = fsync(fd);
-  if (ret) {
+  nvwal_error_t ret = 0;
+  if (fsync(fd)) {
     ret = errno;
-    close(fd);
-    return ret;
   }
 
   close(fd);
-  return 0;
+  return ret;
 }
+
+nvwal_error_t nvwal_open_and_syncfs(const char* path) {
+  int fd = open(path, 0, 0);
+  if (fd == -1) {
+    return errno;
+  }
+
+  assert(fd);
+
+  nvwal_error_t ret = 0;
+  if (syncfs(fd)) {
+    ret = errno;
+  }
+
+  close(fd);
+  return ret;
+}
+
 
 uint8_t nvwal_is_nonempty_dir(const char* path) {
   DIR* dir = opendir(path);
