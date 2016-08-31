@@ -32,6 +32,7 @@
 
 #include <libpmem.h>
 
+#include "nvwal_atomics.h"
 #include "nvwal_types.h"
 #include "nvwal_util.h"
 
@@ -626,10 +627,12 @@ nvwal_error_t mds_bufmgr_alloc_page(
   
   if (page_no == buf->page_no_) {
     /* do nothing: page is already allocated and buffered */
+    *buffer = buf;
     ret = 0;
   } else if (page_no == buf->page_no_+1) {
     ret = mds_io_append_page(file, buf->baseaddr_);
-    buf->page_no_ = page_no; // FIXME: use C11 atomics to update page_no
+    nvwal_atomic_store(&buf->page_no_, page_no);
+    *buffer = buf;
     ret = 0;
   } else {
     assert(0 && "this shouldn't happen");
@@ -642,62 +645,6 @@ nvwal_error_t mds_bufmgr_alloc_page(
 /******************************************************************************
  * Meta-data store core methods
  *****************************************************************************/
-
-/**
- * @brief Normalize epoch id for index arithmetic operations.
- * 
- * @details
- * As epoch 0 is an invalid epoch (kNvwalInvalidEpoch == 0), so epochs
- * start at 1. We therefore subtract 1 one simplify arithmetic operations.
- */
-static inline nvwal_epoch_t normalize_epoch_id(nvwal_epoch_t epoch_id)
-{
-  static_assert(kNvwalInvalidEpoch == 0, "Invalid epoch expected to be 0 but is not.");
-  return epoch_id - 1;
-}
-
-/**
- * @brief Returns the maximum number of epochs per page
- */
-static inline int max_epochs_per_page(struct NvwalMdsContext* mds)
-{ 
-  return mds->config_.mds_page_size_ / sizeof(struct MdsEpochMetadata);
-}
-
-
-/**
- * @brief Returns the file number of the page file storing metadata for 
- * epoch \a epoch_id.
- * 
- * @details
- * To increase write parallelism to the disk, we maintain multiple page files
- * and stripe epoch pages evenly across page files.
- */
-static inline file_no_t epoch_id_to_file_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
-{
-  uint64_t page_offset = normalize_epoch_id(epoch_id) / max_epochs_per_page(mds);
-  return page_offset % kNvwalMdsMaxActivePagefiles;
-}
-
-
-/**
- * @brief Return the page number of the page storing metadata for 
- * epoch \a epoch_id.
- */
-static inline page_no_t epoch_id_to_page_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
-{
-  assert(epoch_id != kNvwalInvalidEpoch);
-  page_no_t page_no = normalize_epoch_id(epoch_id) / (max_epochs_per_page(mds) * kNvwalMdsMaxActivePagefiles);
-  return page_no + 1;
-}
-
-/**
- * @brief Return the record offset relative to the page 
- */
-static inline page_offset_t epoch_id_to_page_offset(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
-{
-  return normalize_epoch_id(epoch_id) % max_epochs_per_page(mds);
-}
 
 nvwal_error_t mds_init(
   const struct NvwalConfig* config, 
@@ -807,7 +754,7 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
     buffer->page_no_ = page_no;
     buffer->file_ = file;
   }
-  
+
   return 0;
 }
 
@@ -833,6 +780,15 @@ void mds_read_epoch(
    */
   assert(0 && "Implement me");
 }
+
+
+nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal)
+{
+  struct NvwalMdsContext* mds = &(wal->mds_);
+
+  return nvwal_atomic_load(&mds->latest_epoch_);
+}
+
 
 
 nvwal_error_t mds_write_epoch(
@@ -863,6 +819,8 @@ nvwal_error_t mds_write_epoch(
     TODO: replace memcpy with memcpy persist
   */
   memcpy(&page->epochs_[epoch_off], epoch_metadata, sizeof(*epoch_metadata));
+
+  nvwal_atomic_fetch_add(&mds->latest_epoch_, 1);
 
   return 0;
 

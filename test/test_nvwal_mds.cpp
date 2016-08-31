@@ -22,6 +22,7 @@
 
 #include "nvwal_api.h"
 
+#include "nvwal_mds.h"
 #include "nvwal_test_mds_common.hpp"
 #include "nvwal_impl_mds.h"
 
@@ -39,13 +40,99 @@ TEST(NvwalMdsTest, Init)
   EXPECT_EQ(0, context.uninit_all());
 }
 
-TEST(NvwalMdsTest, WriteEpoch)
+void write_epoch_batch(struct NvwalContext* wal, nvwal_epoch_t low, nvwal_epoch_t high) 
+{
+  struct MdsEpochMetadata epoch;
+  for (int i=low; i<=high; i++) {
+    epoch.epoch_id_ = i;
+    EXPECT_EQ(0, mds_write_epoch(wal, &epoch));
+  }
+}
+
+/*
+ * Forces the metadata store to restart and recover after writing each batch.
+ */
+void write_multiple_epoch_batches(struct MdsTestContext& context, int num_epoch_batch, nvwal_epoch_t batch_last_epoch[])
+{
+  struct NvwalContext* wal;
+  for (int i=0; i < num_epoch_batch; i++) {
+    /* write batch */
+    wal = context.get_wal(0);
+    nvwal_epoch_t low = (i==0) ? 1 : batch_last_epoch[i-1]+1;
+    nvwal_epoch_t high = batch_last_epoch[i];
+    write_epoch_batch(wal, low, high);
+
+    /* shutdown, restart, and recover */
+    std::string root_path = context.get_root_path();
+    EXPECT_EQ(0, context.uninit_all(false));
+    EXPECT_EQ(0, context.init_all(root_path, false));
+    wal = context.get_wal(0);
+    EXPECT_EQ(0, mds_recover(wal));
+    EXPECT_EQ(high, mds_latest_epoch(wal));
+  }
+} 
+
+TEST(NvwalMdsTest, WriteEpochSingle)
 {
   MdsTestContext context(1);
   EXPECT_EQ(0, context.init_all());
+
+  nvwal_epoch_t batch_last_epoch[1];
+  
+  struct NvwalContext* wal = context.get_wal(0);
+  batch_last_epoch[0] = 1;
+
+  write_multiple_epoch_batches(context, 1, batch_last_epoch);
   EXPECT_EQ(0, context.uninit_all());
+
 }
 
+
+TEST(NvwalMdsTest, WriteEpochOneBatchSmall)
+{
+  MdsTestContext context(1);
+  EXPECT_EQ(0, context.init_all());
+
+  nvwal_epoch_t batch_last_epoch[1];
+  
+  struct NvwalContext* wal = context.get_wal(0);
+  batch_last_epoch[0] = 10;
+
+  write_multiple_epoch_batches(context, 1, batch_last_epoch);
+  EXPECT_EQ(0, context.uninit_all());
+
+}
+
+
+TEST(NvwalMdsTest, WriteEpochOneBatchLarge)
+{
+  MdsTestContext context(1);
+  EXPECT_EQ(0, context.init_all());
+
+  nvwal_epoch_t batch_last_epoch[1];
+  
+  struct NvwalContext* wal = context.get_wal(0);
+  batch_last_epoch[0] = max_epochs_per_page(&wal->mds_)+1;
+
+  write_multiple_epoch_batches(context, 1, batch_last_epoch);
+  EXPECT_EQ(0, context.uninit_all());
+
+}
+
+TEST(NvwalMdsTest, WriteEpochTwoBatches)
+{
+  MdsTestContext context(1);
+  EXPECT_EQ(0, context.init_all());
+
+  nvwal_epoch_t batch_last_epoch[2];
+  
+  struct NvwalContext* wal = context.get_wal(0);
+  batch_last_epoch[0] = max_epochs_per_page(&wal->mds_)+1;
+  batch_last_epoch[1] = max_epochs_per_page(&wal->mds_)+5;
+
+  write_multiple_epoch_batches(context, 2, batch_last_epoch);
+  EXPECT_EQ(0, context.uninit_all());
+}
 
 
 }  // namespace nvwaltest
