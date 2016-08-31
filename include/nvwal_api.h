@@ -185,17 +185,6 @@ static inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
   }
 }
 
-/**
- * @brief Initializes the reader context.
- */
-nvwal_error_t nvwal_reader_init(
-  struct NvwalReaderContext* reader); 
-
-/**
- * @brief Uninitializes the reader context.
- */
-nvwal_error_t nvwal_reader_uninit(
-  struct NvwalReaderContext* reader); 
 
 /**
  * @brief Fetches the requested epoch for the application
@@ -204,11 +193,6 @@ nvwal_error_t nvwal_reader_uninit(
  * @param[out] len Length of buf
  *
  */
-nvwal_error_t get_epoch(
-  struct NvwalContext* wal,
-  nvwal_epoch_t const epoch, 
-  char ** buf, 
-  uint64_t* len);
 
 /**
  * @brief Notifies the reader that the epoch has been processed
@@ -218,9 +202,41 @@ nvwal_error_t get_epoch(
  * @param[in] epoch The consumed epoch
  *
  */
-nvwal_error_t consumed_epoch(
+
+nvwal_error_t nvwal_open_log_cursor(
+  struct NvwalContext* wal, 
+  struct NvwalLogCursor* out,
+  nvwal_epoch_t begin_epoch,
+  nvwal_epoch_t end_epoch);
+
+nvwal_error_t nvwal_close_log_cursor(
   struct NvwalContext* wal,
-  nvwal_epoch_t const epoch);
+  struct NvwalLogCursor* cursor);
+
+/** @brief Makes the next epoch accessible through the cursor.
+ * In the case that an epoch was broken into multiple mappings,
+ * the cursor is updated to make the next mapping accessible,
+ * but current_epoch is not updated.
+ */
+nvwal_error_t nvwal_cursor_next_epoch(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor);
+
+uint8_t nvwal_cursor_is_valid(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor);
+  
+nvwal_byte_t* nvwal_cursor_get_data(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor);
+
+uint64_t nvwal_cursor_get_data_length(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor);
+
+nvwal_epoch_t nvwal_cursor_get_current_epoch(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor);
 
 #ifdef __cplusplus
 }
