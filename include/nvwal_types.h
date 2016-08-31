@@ -181,7 +181,10 @@ typedef int8_t    nvwal_byte_t;
  */
 typedef uint64_t  nvwal_dsid_t;
 
-
+/**
+ * Constant values used in libnvwal.
+ * To be in pure-C, we have to avoid const variables for this purpose.
+ */
 enum NvwalConstants {
   /**
   * This value of epoch is reserved for null/invalid/etc.
@@ -267,7 +270,7 @@ enum NvwalConstants {
 };
 
 /**
- * DESCRIBE ME.
+ * Configurations to launch one WAL instance.
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing.
  */
@@ -380,7 +383,7 @@ struct NvwalWriterEpochFrame {
 };
 
 /**
- * DESCRIBE ME
+ * Represents one user-defined thread that will write logs.
  *
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing. All pointers in
@@ -400,8 +403,8 @@ struct NvwalWriterContext {
   /**
    * Points to the oldest frame this writer is aware of.
    * This variable is written by the flusher only.
-   * @invariant epoch_frames[oldest_frame].log_epoch != kNvwalInvalidEpoch.
-   * To satisfy this invariant, we initialize all writers' first frame during initialization.
+   * When epoch_frames[oldest_frame].log_epoch == kNvwalInvalidEpoch,
+   * it means no frame is currently active.
    */
   uint32_t oldest_frame_;
 
@@ -409,8 +412,8 @@ struct NvwalWriterContext {
    * Points to the newest frame this writer is using, which is also the only frame
    * this writer is now putting logs to.
    * This variable is read/written by the writer only.
-   * @invariant epoch_frames[active_frame].log_epoch != kNvwalInvalidEpoch.
-   * To satisfy this invariant, we initialize all writers' first frame during initialization.
+   * When epoch_frames[active_frame].log_epoch == kNvwalInvalidEpoch,
+   * it means no frame is currently active.
    */
   uint32_t active_frame_;
 

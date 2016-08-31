@@ -47,21 +47,18 @@ nvwal_error_t nvwal_uninit(
   return nvwal_impl_uninit(wal);
 }
 
+nvwal_error_t nvwal_query_durable_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t* out) {
+  *out = nvwal_atomic_load(&wal->durable_epoch_);
+  return 0;
+}
 
 /**************************************************************************
  *
  *  Writers
  *
  ***************************************************************************/
-
-void assert_writer_current_frames(
-  const struct NvwalWriterContext* writer) {
-  assert(writer->oldest_frame_ < kNvwalEpochFrameCount);
-  assert(writer->epoch_frames_[writer->oldest_frame_].log_epoch_);
-  assert(writer->active_frame_ < kNvwalEpochFrameCount);
-  assert(writer->epoch_frames_[writer->active_frame_].log_epoch_);
-}
-
 uint32_t wrap_writer_epoch_frame(
   uint32_t current_epoch_frame) {
   assert(current_epoch_frame < kNvwalEpochFrameCount * 2U);
@@ -75,10 +72,7 @@ uint32_t wrap_writer_epoch_frame(
 uint64_t wrap_writer_offset(
   const struct NvwalWriterContext* writer,
   uint64_t offset) {
-  uint64_t buffer_size;
-
-  assert_writer_current_frames(writer);
-  buffer_size = writer->parent_->config_.writer_buffer_size_;
+  uint64_t buffer_size = writer->parent_->config_.writer_buffer_size_;
   assert(offset < buffer_size * 2U);
   if (offset < buffer_size) {
     return offset;
@@ -91,10 +85,7 @@ uint64_t calculate_writer_offset_distance(
   const struct NvwalWriterContext* writer,
   uint64_t left_offset,
   uint64_t right_offset) {
-  uint64_t buffer_size;
-
-  assert_writer_current_frames(writer);
-  buffer_size = writer->parent_->config_.writer_buffer_size_;
+  uint64_t buffer_size = writer->parent_->config_.writer_buffer_size_;
   if (left_offset == right_offset) {
     return 0;
   } else  if (left_offset < right_offset) {
@@ -110,26 +101,28 @@ uint64_t calculate_writer_offset_distance(
 void assure_writer_active_frame(
   struct NvwalWriterContext* writer,
   nvwal_epoch_t log_epoch) {
-  struct NvwalWriterEpochFrame* frame;
-
-  assert_writer_current_frames(writer);
-  frame = writer->epoch_frames_ + writer->active_frame_;
-  assert(nvwal_is_epoch_equal_or_after(log_epoch, frame->log_epoch_));
+  struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + writer->active_frame_;
   if (frame->log_epoch_ == log_epoch) {
     /** The epoch exists. Most likely this case. */
   } else {
     /**
-     * We newly populate this frame.
+     * We must newly populate a frame for this epoch.
      * Release offsets before publisizing the frame (==store to epoch).
      */
-    writer->active_frame_ = wrap_writer_epoch_frame(writer->active_frame_ + 1U);
-    /**
-     * Now active_frame is surely ahead of oldest_frame.
-     * If the assert below fires, this writer was issueing too new epochs,
-     * violating the "upto + 2" contract.
-     */
-    assert(writer->active_frame_ != writer->oldest_frame_);
-    frame = writer->epoch_frames_ + writer->active_frame_;
+    if (frame->log_epoch_ == kNvwalInvalidEpoch) {
+      /** null active frame means we have no active frame! probably has been idle */
+      assert(writer->active_frame_ == writer->oldest_frame_);
+    } else {
+      /** active frame is too old. we move on to next */
+      writer->active_frame_ = wrap_writer_epoch_frame(writer->active_frame_ + 1U);
+      /**
+       * Now active_frame is surely ahead of oldest_frame.
+       * If the assert below fires, this writer was issueing too new epochs,
+       * violating the "upto + 2" contract.
+       */
+      assert(writer->active_frame_ != writer->oldest_frame_);
+      frame = writer->epoch_frames_ + writer->active_frame_;
+    }
 
     /**
      * Otherwise we caught up on the oldest.
@@ -315,7 +308,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
     struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
     nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
     if (frame_epoch == kNvwalInvalidEpoch
-      || nvwal_is_epoch_equal_or_after(target_epoch, frame_epoch)) {
+      || nvwal_is_epoch_equal_or_after(frame_epoch, target_epoch)) {
       break;
     }
   }
@@ -327,7 +320,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
   struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
   nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
   if (frame_epoch == kNvwalInvalidEpoch
-    || nvwal_is_epoch_after(target_epoch, frame_epoch)) {
+    || nvwal_is_epoch_after(frame_epoch, target_epoch)) {
     return 0;  /** It's too new. Or target_epoch logs don't exist. Skip. */
   }
 
@@ -337,13 +330,16 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
   while (1) {  /** Until we write out all logs in this frame */
     const uint32_t segment_index = wal->cur_seg_idx_;
     struct NvwalLogSegment* cur_segment = wal->segments_ + segment_index;
+    assert(cur_segment->nv_baseaddr_);
 
     /** We read the markers, then the data. Must prohibit reordering */
     const uint64_t head = nvwal_atomic_load_acquire(&frame->head_offset_);
     const uint64_t tail = nvwal_atomic_load_acquire(&frame->tail_offset_);
 
     const uint64_t distance = calculate_writer_offset_distance(writer, head, tail);
-    assert(distance);  /** Then why this frame still exists?? */
+    if (distance == 0) {
+      return 0;  /** no relevant logs here... yet */
+    }
 
     assert(cur_segment->written_bytes_ <= segment_size);
     const uint64_t writable_bytes = cur_segment->written_bytes_ - segment_size;
@@ -361,6 +357,10 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
     uint64_t new_head = wrap_writer_offset(writer, head + copied_bytes);
     if (new_head == tail && is_stable_epoch) {
       /** This frame is done! */
+      memset(
+        writer->epoch_frames_ + frame_index,
+        0,
+        sizeof(struct NvwalWriterEpochFrame));
       nvwal_atomic_store(&writer->oldest_frame_, wrap_writer_epoch_frame(frame_index + 1));
     } else {
       /** This frame might receive more logs. We just remember the new head */
@@ -754,4 +754,5 @@ nvwal_error_t consumed_epoch(
 
   return error_code; /* no error */
 }
+
 

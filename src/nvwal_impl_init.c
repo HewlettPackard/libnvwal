@@ -236,7 +236,6 @@ nvwal_error_t nvwal_impl_init(
     writer->copied_offset_ = 0;
     writer->buffer_ = config->writer_buffers_[i];
     memset(writer->epoch_frames_, 0, sizeof(writer->epoch_frames_));
-    writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
   }
 
   /** TODO we must retrieve this from MDS in restart case */
@@ -259,7 +258,6 @@ nvwal_error_t nvwal_impl_init(
 
   /* Initialize all nv segments */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
-    memset(wal->segments_, 0, sizeof(struct NvwalLogSegment));
     ret = init_fresh_nvram_segment(wal, wal->segments_ + i);
     if (ret) {
       goto error_return;
