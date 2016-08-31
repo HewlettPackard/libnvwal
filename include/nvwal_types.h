@@ -181,7 +181,49 @@ typedef int8_t    nvwal_byte_t;
  */
 typedef uint64_t  nvwal_dsid_t;
 
+/**
+ * @brief Parameter to control how libnvwal initializes each WAL instance.
+ * @see nvwal_init()
+ * @details
+ * This parameter flag is analogous to O_CREAT/O_TRUNCATE etc for open(2).
+ * If you know the behavior of those flags in open, these flags should be
+ * straightforward to you.
+ */
+enum NvwalInitMode {
+  /**
+   * Attempts to restart existing WAL instance and fails if a restart-able
+   * WAL instance doesn't exist in the specified NV folder.
+   * Doesn't create any new WAL instance in any circumstance.
+   */
+  kNvwalInitRestart = 0,
+  /**
+   * If there is something in the specified NV folder,
+   * then it attempts to restart. Fails if it is not restartable.
+   *
+   * It creates a new WAL instance there
+   * if and only if the folder is completely empty,
+   *
+   * In other words, this is a non-destructive option for create.
+   */
+  kNvwalInitCreateIfNotExists = 1,
+  /**
+   * This always creates a fresh new WAL instance and deletes
+   * all files, if any, in the specified NV folder at beginning.
+   *
+   * In other words, this is a destructive option for create.
+   */
+  kNvwalInitCreateTruncate = 3,
+  /**
+   * Maybe something analogous to O_EXCL to handle mis-configuration
+   * where the user accidentally specified the same NV-folder
+   * for two WAL instances. later, later...
+   */
+};
 
+/**
+ * Constant values used in libnvwal.
+ * To be in pure-C, we have to avoid const variables for this purpose.
+ */
 enum NvwalConstants {
   /**
   * This value of epoch is reserved for null/invalid/etc.
@@ -267,7 +309,7 @@ enum NvwalConstants {
 };
 
 /**
- * DESCRIBE ME.
+ * Configurations to launch one WAL instance.
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing.
  */
@@ -333,7 +375,7 @@ struct NvwalConfig {
   nvwal_byte_t* writer_buffers_[kNvwalMaxWorkers];
 
   /** 
-   * Byte size of metadata store buffer page.
+   * Byte size of meta-data store page.
    * Must be a multiple of 512.
    * If this is 0 (not set), we automatically set kNvwalMdsPageSize.
    */
@@ -380,7 +422,7 @@ struct NvwalWriterEpochFrame {
 };
 
 /**
- * DESCRIBE ME
+ * Represents one user-defined thread that will write logs.
  *
  * @note This object is a POD. It can be simply initialized by memzero,
  * copied by memcpy, and no need to free any thing. All pointers in
@@ -400,8 +442,8 @@ struct NvwalWriterContext {
   /**
    * Points to the oldest frame this writer is aware of.
    * This variable is written by the flusher only.
-   * @invariant epoch_frames[oldest_frame].log_epoch != kNvwalInvalidEpoch.
-   * To satisfy this invariant, we initialize all writers' first frame during initialization.
+   * When epoch_frames[oldest_frame].log_epoch == kNvwalInvalidEpoch,
+   * it means no frame is currently active.
    */
   uint32_t oldest_frame_;
 
@@ -409,8 +451,8 @@ struct NvwalWriterContext {
    * Points to the newest frame this writer is using, which is also the only frame
    * this writer is now putting logs to.
    * This variable is read/written by the writer only.
-   * @invariant epoch_frames[active_frame].log_epoch != kNvwalInvalidEpoch.
-   * To satisfy this invariant, we initialize all writers' first frame during initialization.
+   * When epoch_frames[active_frame].log_epoch == kNvwalInvalidEpoch,
+   * it means no frame is currently active.
    */
   uint32_t active_frame_;
 
@@ -504,6 +546,20 @@ struct NvwalLogSegment {
 };
 
 /**
+ * @brief Represents a context of a meta-data-store I/O subsystem instance.
+ */
+struct NvwalMdsIoContext {
+  /** Runtime configuration parameters */
+  struct NvwalConfig config_;
+
+  /** Active (open) page files */
+  struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
+
+  /** Buffers */
+  struct NvwalMdsBuffer* write_buffers_[kNvwalMdsMaxActivePagefiles];
+};
+
+/**
  * @brief Represents a context of a meta-data-store buffer-manager instance.
  */
 struct NvwalMdsBufferManagerContext {
@@ -521,7 +577,8 @@ struct NvwalMdsContext {
   /** Runtime configuration parameters */
   struct NvwalConfig config_;
 
-  struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
+  /** IO subsystem context */
+  struct NvwalMdsIoContext io_;
 
   /** Buffer manager context */
   struct NvwalMdsBufferManagerContext bufmgr_;   

@@ -95,7 +95,7 @@ nvwal_error_t TestContext::init_all() {
     }
     config.writer_count_ = kWriterCount;
 
-    auto ret = nvwal_init(&config, wal);
+    auto ret = nvwal_init(&config, kNvwalInitCreateIfNotExists, wal);
     if (ret) {
       std::cerr << "TestContext::init_all() : Fatal! failed to initialize WAL instance-"
         << w << ". errno=" << ret << std::endl;

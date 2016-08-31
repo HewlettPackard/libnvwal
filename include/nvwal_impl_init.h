@@ -37,6 +37,7 @@
  */
 nvwal_error_t nvwal_impl_init(
   const struct NvwalConfig* given_config,
+  enum NvwalInitMode mode,
   struct NvwalContext* wal);
 
 /**

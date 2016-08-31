@@ -145,6 +145,7 @@ void remove_trailing_slash(char* path, uint16_t* len) {
 
 nvwal_error_t nvwal_impl_init(
   const struct NvwalConfig* given_config,
+  enum NvwalInitMode mode,
   struct NvwalContext* wal) {
   struct NvwalWriterContext* writer;
   struct NvwalConfig* config;
@@ -236,7 +237,6 @@ nvwal_error_t nvwal_impl_init(
     writer->copied_offset_ = 0;
     writer->buffer_ = config->writer_buffers_[i];
     memset(writer->epoch_frames_, 0, sizeof(writer->epoch_frames_));
-    writer->epoch_frames_[0].log_epoch_ = config->resuming_epoch_;
   }
 
   /** TODO we must retrieve this from MDS in restart case */
@@ -259,19 +259,22 @@ nvwal_error_t nvwal_impl_init(
 
   /* Initialize all nv segments */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
-    memset(wal->segments_, 0, sizeof(struct NvwalLogSegment));
     ret = init_fresh_nvram_segment(wal, wal->segments_ + i);
     if (ret) {
       goto error_return;
     }
   }
 
-  /* Created files on NVDIMM/Disk, fsync parent directory */
-  ret = nvwal_open_and_fsync(config->nv_root_);
+  /*
+   * Created files on NVDIMM/Disk, sync everything in filesystem level.
+   * This is more efficient than individual, lots of fsync.
+   * We thus don't invoke fsync() in each init_fresh_nvram_segment.
+   */
+  ret = nvwal_open_and_syncfs(config->nv_root_);
   if (ret) {
     goto error_return;
   }
-  ret = nvwal_open_and_fsync(config->disk_root_);
+  ret = nvwal_open_and_syncfs(config->disk_root_);
   if (ret) {
     goto error_return;
   }
@@ -328,12 +331,6 @@ nvwal_error_t init_fresh_nvram_segment(
     return EINVAL;
   }
 
-  if (fsync(segment->nv_fd_)) {
-    /** Failed to fsync! */
-    assert(errno);
-    return errno;
-  }
-
   /**
    * Don't bother (non-transparent) huge pages. Even libpmem doesn't try it.
    */
@@ -356,6 +353,15 @@ nvwal_error_t init_fresh_nvram_segment(
    */
   memset(segment->nv_baseaddr_, 0, wal->config_.segment_size_);
   msync(segment->nv_baseaddr_, wal->config_.segment_size_, MS_SYNC);
+
+  /** To speed up start up, we don't do fsync here.
+  We rather do syncfs at the end.
+  if (fsync(segment->nv_fd_)) {
+    assert(errno);
+    return errno;
+  }
+  */
+
   return 0;
 }
 

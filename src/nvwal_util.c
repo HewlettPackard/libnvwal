@@ -18,6 +18,7 @@
 #include "nvwal_util.h"
 
 #include <assert.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -71,8 +72,12 @@ void nvwal_concat_sequence_filename(
   memcpy(out, folder, folder_len);
   out_len = folder_len;
 
-  out[out_len] = '/';
-  ++out_len;
+  if (folder_len == 0) {
+    /* No folder specified. Probably not a good practice, but we tolerate it */
+  } else if (folder[folder_len - 1] != '/') {
+    out[out_len] = '/';
+    ++out_len;
+  }
 
   memcpy(out + out_len, file_prefix, file_prefix_len);
   out_len += file_prefix_len;
@@ -118,25 +123,56 @@ int nvwal_open_best_effort_o_direct(
 }
 
 nvwal_error_t nvwal_open_and_fsync(const char* path) {
-  nvwal_error_t ret;
-  int fd;
-
-  fd = open(path, 0, 0);
+  int fd = open(path, 0, 0);
   if (fd == -1) {
     return errno;
   }
 
   assert(fd);
 
-  ret = fsync(fd);
-  if (ret) {
+  nvwal_error_t ret = 0;
+  if (fsync(fd)) {
     ret = errno;
-    close(fd);
-    return ret;
   }
 
   close(fd);
-  return 0;
+  return ret;
+}
+
+nvwal_error_t nvwal_open_and_syncfs(const char* path) {
+  int fd = open(path, 0, 0);
+  if (fd == -1) {
+    return errno;
+  }
+
+  assert(fd);
+
+  nvwal_error_t ret = 0;
+  if (syncfs(fd)) {
+    ret = errno;
+  }
+
+  close(fd);
+  return ret;
+}
+
+
+uint8_t nvwal_is_nonempty_dir(const char* path) {
+  DIR* dir = opendir(path);
+  if (dir) {
+    int found = 0;  /** Remember, there are "." and ".." */
+    while (found <= 2) {
+      if (readdir(dir)) {
+        ++found;
+      } else {
+        break;
+      }
+    }
+    closedir(dir);
+    return (found > 2) ? 1U : 0U;
+  } else {
+    return 0U;
+  }
 }
 
 void nvwal_circular_memcpy(
