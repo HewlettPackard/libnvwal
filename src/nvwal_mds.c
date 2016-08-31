@@ -48,7 +48,7 @@ static_assert(sizeof(struct MdsEpochMetadata) == 64,
 
 #define ASSERT_FD_VALID(fd) assert(fd != -1)
 
-#define MDS_NVRAM_BUFFER_FILE_PREFIX  "mds-nvram-buffer-"
+#define MDS_NVRAM_BUFFER_FILE_PREFIX  "mds-nvram-buf-"
 #define MDS_PAGE_FILE_PREFIX          "mds-pagefile-"
 
 #include "nvwal_impl_mds.h"
@@ -366,7 +366,7 @@ static nvwal_error_t create_nvram_buffer_file(
     MDS_NVRAM_BUFFER_FILE_PREFIX,
     buffer_id,
     pathname);
-    
+
   nv_fd = open(pathname,
             O_CREAT|O_RDWR|O_TRUNC,
             S_IRUSR|S_IWUSR);
@@ -482,7 +482,7 @@ static nvwal_error_t mds_bufmgr_init_nvram_buffer(
   /* Attempt to map a buffer file and if it doesn't exist create 
    * it and map it */
   ret = map_nvram_buffer_file(bufmgr, buffer_id, &baseaddr);
-  if (ret == EACCES) {
+  if (ret == ENOENT) {
     ret = create_nvram_buffer_file(bufmgr, buffer_id);
     if (ret != 0) {
       goto error_return;
@@ -495,7 +495,7 @@ static nvwal_error_t mds_bufmgr_init_nvram_buffer(
 
   /* create buffer descriptor */
   *buffer = malloc(sizeof(**buffer));
-  if (*buffer) {
+  if (*buffer == NULL) {
     ret = ENOMEM;
     ret = unmap_nvram_buffer_file(bufmgr, baseaddr);
     goto error_return;
@@ -543,12 +543,14 @@ nvwal_error_t mds_bufmgr_init(
   const struct NvwalConfig* config, 
   struct NvwalMdsBufferManagerContext* bufmgr)
 {
+  nvwal_error_t ret;
+
   memset(bufmgr, 0, sizeof(*bufmgr));
   memcpy(&bufmgr->config_, config, sizeof(*config));
 
-  mds_bufmgr_init_nvram_buffers(bufmgr);
+  ret = mds_bufmgr_init_nvram_buffers(bufmgr);
 
-  return 0;
+  return ret;
 }
 
 
@@ -561,11 +563,13 @@ nvwal_error_t mds_bufmgr_uninit(
 
   for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
     buffer = bufmgr->write_buffers_[i];
-    ret = unmap_nvram_buffer_file(bufmgr, buffer->baseaddr_);
-    if (ret != 0) {
-      goto error_return;
+    if (buffer) {
+      ret = unmap_nvram_buffer_file(bufmgr, buffer->baseaddr_);
+        if (ret != 0) {
+          goto error_return;
+      }
+      free(buffer);
     }
-    free(buffer);
     bufmgr->write_buffers_[i] = NULL;
   }
   return 0;
@@ -606,9 +610,10 @@ nvwal_error_t mds_bufmgr_read_page(
  * @brief Allocates and buffers a page.
  * 
  * @details
- * As the buffer is durable, we simply allocate a durable buffer and 
- * lazily allocate the page in the page file by allocating the page 
- * when we finally evict it.
+ * As the buffer is durable, we simply allocate a durable buffer that 
+ * will hold the page. We lazily allocate the page in the page-file by 
+ * allocating and writing the page when we finally evict it from the 
+ * buffer.
  */
 nvwal_error_t mds_bufmgr_alloc_page(
   struct NvwalMdsBufferManagerContext* bufmgr, 
@@ -624,7 +629,7 @@ nvwal_error_t mds_bufmgr_alloc_page(
     ret = 0;
   } else if (page_no == buf->page_no_+1) {
     ret = mds_io_append_page(file, buf->baseaddr_);
-    buf->page_no_ = page_no; 
+    buf->page_no_ = page_no; // FIXME: use C11 atomics to update page_no
     ret = 0;
   } else {
     assert(0 && "this shouldn't happen");
@@ -698,6 +703,9 @@ nvwal_error_t mds_init(
   const struct NvwalConfig* config, 
   struct NvwalContext* wal) 
 {
+  nvwal_error_t ret;
+  nvwal_error_t ret2;
+
   struct NvwalMdsContext* mds = &(wal->mds_);
   struct NvwalMdsIoContext* io = &(mds->io_);
   struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
@@ -705,10 +713,22 @@ nvwal_error_t mds_init(
   memset(mds, 0, sizeof(*mds));
   memcpy(&mds->config_, config, sizeof(*config));
 
-  mds_io_init(config, io);
-  mds_bufmgr_init(config, bufmgr);
+  ret = mds_io_init(config, io);
+  if (ret != 0) {
+    goto error_return;
+  }
+  ret = mds_bufmgr_init(config, bufmgr);
+  if (ret != 0) {
+    goto error_io_uninit;
+  }
 
   return 0;
+
+error_io_uninit:
+  ret2 = mds_io_uninit(io);
+  assert(ret2 == 0);
+error_return:
+  return ret;
 }
 
 
