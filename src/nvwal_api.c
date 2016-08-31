@@ -38,8 +38,9 @@
 /** Lengthy init/uninit were moved to nvwal_impl_init.c */
 nvwal_error_t nvwal_init(
   const struct NvwalConfig* given_config,
+  enum NvwalInitMode mode,
   struct NvwalContext* wal) {
-  return nvwal_impl_init(given_config, wal);
+  return nvwal_impl_init(given_config, mode, wal);
 }
 
 nvwal_error_t nvwal_uninit(
@@ -262,7 +263,11 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
     = nvwal_increment_epoch(wal->durable_epoch_);
   const uint8_t is_stable_epoch = (target_epoch == wal->stable_epoch_);
 
-  /* Look for work */
+  /*
+   * We don't make things durable for each writer-traversal.
+   * We rather do it after taking a look at all workers.
+   * Otherwise it's too frequent.
+   */
   for (uint32_t cur_writer_id = 0;
         cur_writer_id < wal->config_.writer_count_;
         ++cur_writer_id) {
@@ -273,13 +278,6 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
     if (error_code) {
       return error_code;
     }
-    /* Ensure writes are durable in NVM */
-    /* pmem_drain(); */
-
-    /* Some kind of metadata commit, we could use libpmemlog.
-      * This needs to track which epochs are durable, what's on disk
-      * etc. */
-    //commit_metadata_updates(wal)
 
     /** Promptly react when obvious. but no need to be atomic read. */
     if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {

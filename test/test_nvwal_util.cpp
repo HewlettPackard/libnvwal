@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <boost/filesystem.hpp>
 
 #include "nvwal_test_common.hpp"
 #include "nvwal_util.h"
@@ -117,6 +118,28 @@ TEST(NvwalUtilTest, ConcatSequenceFilename) {
     0x3F0AEU,
     path);
   EXPECT_STREQ("bar_0003F0AE", path);
+}
+
+TEST(NvwalUtilTest, IsNonemptyDir) {
+  boost::filesystem::path temp_folder_path = boost::filesystem::unique_path();
+  const std::string str_path = temp_folder_path.native();
+
+  EXPECT_EQ(0, nvwal_is_nonempty_dir(str_path.c_str()));
+  boost::filesystem::create_directory(temp_folder_path);
+  EXPECT_EQ(0, nvwal_is_nonempty_dir(str_path.c_str()));
+
+  boost::filesystem::path child_path(temp_folder_path);
+  child_path /= "child";
+  boost::filesystem::create_directory(child_path);
+
+  EXPECT_EQ(1U, nvwal_is_nonempty_dir(str_path.c_str()));
+
+  EXPECT_EQ(0, nvwal_is_nonempty_dir(child_path.c_str()));
+  boost::filesystem::remove(child_path);
+
+  EXPECT_EQ(0, nvwal_is_nonempty_dir(str_path.c_str()));
+  boost::filesystem::remove_all(temp_folder_path);
+  EXPECT_EQ(0, nvwal_is_nonempty_dir(str_path.c_str()));
 }
 
 }  // namespace nvwaltest

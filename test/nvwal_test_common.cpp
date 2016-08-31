@@ -95,7 +95,7 @@ nvwal_error_t TestContext::init_all() {
     }
     config.writer_count_ = kWriterCount;
 
-    auto ret = nvwal_init(&config, wal);
+    auto ret = nvwal_init(&config, kNvwalInitCreateIfNotExists, wal);
     if (ret) {
       std::cerr << "TestContext::init_all() : Fatal! failed to initialize WAL instance-"
         << w << ". errno=" << ret << std::endl;
@@ -133,11 +133,6 @@ nvwal_error_t TestContext::uninit_all() {
 
 
 void WalResource::launch_flusher() {
-  flusher_ = std::move(std::thread(
-    [this](){
-      this->flusher_exit_code_ = nvwal_flusher_main(&this->wal_instance_);
-    }
-  ));
   nvwal_wait_for_flusher_start(&wal_instance_);
 }
 

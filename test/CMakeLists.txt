@@ -18,7 +18,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 # Only under test folder, we depend on boost.
 # When you don't want to have these dependencies, skip the whole test folder (-DNO_NVWAL_TEST)
-find_package(Boost 1.36.0 REQUIRED COMPONENTS filesystem)
+find_package(Boost 1.36.0 REQUIRED COMPONENTS filesystem system)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(SYSTEM
   ${Boost_INCLUDE_DIRS}
@@ -114,7 +114,7 @@ add_nvwal_test_individual(test_nvwal_mds "Init;WriteEpoch")
 
 add_nvwal_test_individual(test_nvwal_mds_io "Init;AppendPage")
 
-add_nvwal_test_individual(test_nvwal_util "CircularMemcpy;CircularMemcpyWrap;ConcatSequenceFilename")
+add_nvwal_test_individual(test_nvwal_util "CircularMemcpy;CircularMemcpyWrap;ConcatSequenceFilename;IsNonemptyDir")
 
 add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs")
 

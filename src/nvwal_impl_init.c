@@ -145,6 +145,7 @@ void remove_trailing_slash(char* path, uint16_t* len) {
 
 nvwal_error_t nvwal_impl_init(
   const struct NvwalConfig* given_config,
+  enum NvwalInitMode mode,
   struct NvwalContext* wal) {
   struct NvwalWriterContext* writer;
   struct NvwalConfig* config;

@@ -18,6 +18,7 @@
 #include "nvwal_util.h"
 
 #include <assert.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -141,6 +142,24 @@ nvwal_error_t nvwal_open_and_fsync(const char* path) {
 
   close(fd);
   return 0;
+}
+
+uint8_t nvwal_is_nonempty_dir(const char* path) {
+  DIR* dir = opendir(path);
+  if (dir) {
+    int found = 0;  /** Remember, there are "." and ".." */
+    while (found <= 2) {
+      if (readdir(dir)) {
+        ++found;
+      } else {
+        break;
+      }
+    }
+    closedir(dir);
+    return (found > 2) ? 1U : 0U;
+  } else {
+    return 0U;
+  }
 }
 
 void nvwal_circular_memcpy(

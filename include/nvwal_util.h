@@ -76,6 +76,12 @@ int nvwal_open_best_effort_o_direct(
 nvwal_error_t nvwal_open_and_fsync(const char* path);
 
 /**
+ * @returns Whether the given path represents a valid folder with at least one child.
+ * Returns 0 in all other cases, including the folder doesn't exist, any I/O error.
+ */
+uint8_t nvwal_is_nonempty_dir(const char* path);
+
+/**
  * Used to retain the last-observed error.
  */
 nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code);

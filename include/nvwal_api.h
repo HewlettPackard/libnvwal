@@ -37,7 +37,9 @@ extern "C" {
  * @brief Initializes a WAL instance.
  * @param[in] config the configurations for this WAL instance.
  * This object must \b NOT be pointing to wal->config.
- * @param[out] wal The WAL instance to initialize.
+ * @param[in] mode Specifies whether we just restart or newly create, in a destructive fashion,
+ * etc. If you give 0, it just restarts from an existring folder.
+ * @param[out] out_wal The WAL instance to initialize.
  * @details
  * To use libnvwal, you must first call this API to initialize
  * your WAL instance.
@@ -59,7 +61,8 @@ extern "C" {
  */
 nvwal_error_t nvwal_init(
   const struct NvwalConfig* config,
-  struct NvwalContext* wal);
+  enum NvwalInitMode mode,
+  struct NvwalContext* out_wal);
 
 /**
  * @brief Releases all resources this WAL instance had.

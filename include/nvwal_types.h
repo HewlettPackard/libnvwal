@@ -182,6 +182,45 @@ typedef int8_t    nvwal_byte_t;
 typedef uint64_t  nvwal_dsid_t;
 
 /**
+ * @brief Parameter to control how libnvwal initializes each WAL instance.
+ * @see nvwal_init()
+ * @details
+ * This parameter flag is analogous to O_CREAT/O_TRUNCATE etc for open(2).
+ * If you know the behavior of those flags in open, these flags should be
+ * straightforward to you.
+ */
+enum NvwalInitMode {
+  /**
+   * Attempts to restart existing WAL instance and fails if a restart-able
+   * WAL instance doesn't exist in the specified NV folder.
+   * Doesn't create any new WAL instance in any circumstance.
+   */
+  kNvwalInitRestart = 0,
+  /**
+   * If there is something in the specified NV folder,
+   * then it attempts to restart. Fails if it is not restartable.
+   *
+   * It creates a new WAL instance there
+   * if and only if the folder is completely empty,
+   *
+   * In other words, this is a non-destructive option for create.
+   */
+  kNvwalInitCreateIfNotExists = 1,
+  /**
+   * This always creates a fresh new WAL instance and deletes
+   * all files, if any, in the specified NV folder at beginning.
+   *
+   * In other words, this is a destructive option for create.
+   */
+  kNvwalInitCreateTruncate = 3,
+  /**
+   * Maybe something analogous to O_EXCL to handle mis-configuration
+   * where the user accidentally specified the same NV-folder
+   * for two WAL instances. later, later...
+   */
+};
+
+/**
  * Constant values used in libnvwal.
  * To be in pure-C, we have to avoid const variables for this purpose.
  */
