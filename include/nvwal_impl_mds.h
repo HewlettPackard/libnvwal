@@ -116,7 +116,7 @@ static inline page_no_t epoch_id_to_page_no(struct NvwalMdsContext* mds, nvwal_e
 {
   assert(epoch_id != kNvwalInvalidEpoch);
   page_no_t page_no = normalize_epoch_id(epoch_id) / (max_epochs_per_page(mds) * kNvwalMdsMaxActivePagefiles);
-  return page_no + 1;
+  return page_no;
 }
 
 /**
@@ -126,6 +126,15 @@ static inline page_offset_t epoch_id_to_page_offset(struct NvwalMdsContext* mds,
 {
   return normalize_epoch_id(epoch_id) % max_epochs_per_page(mds);
 }
+
+/**
+ * @brief Return the byte offset relative to the file 
+ */
+static inline off_t epoch_id_to_file_offset(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
+{
+  return normalize_epoch_id(epoch_id) * sizeof(struct MdsEpochMetadata);
+}
+
 
 
 /******************************************************************************

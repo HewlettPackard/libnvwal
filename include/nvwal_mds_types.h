@@ -49,6 +49,19 @@ struct MdsEpochMetadata {
   };
 };
 
+struct MdsEpochIteratorBuffer {
+  struct MdsEpochMetadata epoch_metadata_[kNvwalMdsReadPrefetch];
+  int num_entries_;
+};
+
+struct MdsEpochIterator {
+  struct NvwalContext* wal_;
+  nvwal_epoch_t cur_epoch_id_;  /**< Current epoch */
+  nvwal_epoch_t begin_epoch_id_; /**< First epoch in the iterator range */
+  nvwal_epoch_t end_epoch_id_; /**< Last epoch in the iterator range */
+  struct MdsEpochIteratorBuffer buffer_; /**< Buffer holding prefetced entries */
+  struct MdsEpochMetadata* epoch_metadata_; /**< Pointer to the current epoch */
+};
 
 
 /** @} */

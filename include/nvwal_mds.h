@@ -91,6 +91,30 @@ nvwal_error_t mds_write_epoch(
  */
 nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal);
 
+/**
+ * TODO: describe me
+ */
+nvwal_error_t mds_epoch_iterator_init(
+  struct NvwalContext* wal, 
+  nvwal_epoch_t begin_epoch_id, 
+  nvwal_epoch_t end_epoch_id,
+  struct MdsEpochIterator* iterator);
+
+/**
+ * TODO: describe me
+ */
+void mds_epoch_iterator_next(struct MdsEpochIterator* iterator);
+
+/**
+ * TODO: describe me
+ */
+int mds_epoch_iterator_done(struct MdsEpochIterator* iterator);
+
+
+/**
+ * TODO: describe me
+ */
+nvwal_error_t mds_epoch_iterator_destroy(struct MdsEpochIterator* iterator);
 
 #ifdef __cplusplus
 }

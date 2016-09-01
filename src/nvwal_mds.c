@@ -54,47 +54,6 @@ static_assert(sizeof(struct MdsEpochMetadata) == 64,
 
 #include "nvwal_impl_mds.h"
 
-/*
- * QUESTIONS:
- * -thread safety: does user ensure thread safety or the metadata store?
- * -buffering: 
-     - one nvram buffer for writing (appending?), and one dram buffer for reading 
-       - buffers are non overlapping
-     - nvram buffer: 
-        - used for writing but also supports reading 
-        - as large as the segment
-        - durable: mmaped to a nvram file 
-     - dram buffer 
-        - used for reading only
-        - smaller than segment (prefetching size)
-        - volatile: malloced or mmaped to anonymous memory
-
- *  - for the nvram buffer, do we need any durable header that is stored in nvram. 
- *  - we should probably avoid something that we need to update frequently to avoid 
- *    extra ordering. for example, we don't need to keep track of the head/tail if 
- *    we have a way to infer this from the metadata. if we start with a buffer that is
- *    always zero, then we can scan for valid log records based on a non-zero flag. 
-
- TODO:
- Buffer manager
-  - upon initialization, the manager remaps any durable buffers.
-    but it doesn't associate the buffers with the associated disk page.
-    it's the responsibility of the user to assign each buffer to a disk page as this step requires recovery logic (detect whether the page exists).
-    this can be done by inspecting the contents of the page and from the contents infer the disk page. for example, the page can include a page header
-    with the fileno/pageno. or this information could be derived by the epoch ids as it is the case with epoch metadata.
-    a trivial case is a buffer than contains just zeros. 
-    in general the buffer manager should provide enough mechanism and interface to enable a client perform recovery.
-  - we therefore provide an iterator interface that the user can use to iterate over all buffers and associate each buffer with a disk page when the user performs recovery  
- Recovery:
- - what if a durable buffer contains all zeros. we can reclaim this buffer.
-   invariant: we zero a buffer only after we write the buffer out to the disk page file and sync the disk file. 
- */
-
-/*
-  TODO: Code should be NUMA aware
- */
-
-
 
 int strcat_s(char *dest, size_t destsz, const char* src)
 {
@@ -234,6 +193,34 @@ inline struct PageFile* mds_io_file(
     return NULL;
   }
   return io->active_files_[file_no];
+}
+
+
+nvwal_error_t mds_io_pread(
+  struct PageFile* file, 
+  void* buf, 
+  size_t count, 
+  off_t offset)
+{
+  nvwal_error_t ret;
+
+
+  /* we might need multiple preads */
+  size_t total_read = 0;
+  while (total_read < count) {
+    ret = pread(file->fd_, (char*) buf + total_read, count - total_read, offset+total_read);
+    if (ret < 0) {
+      ret = errno;
+      goto error_return;
+    }
+    total_read += ret;
+  }
+  
+  return 0; 
+
+error_return:
+  errno = ret;
+  return ret;
 }
 
 
@@ -587,26 +574,6 @@ static inline struct Page* mds_bufmgr_page(struct NvwalMdsBuffer* buffer)
 }
 
 
-nvwal_error_t mds_bufmgr_alloc_buffer(
-  struct NvwalMdsBufferManagerContext* bufmgr,
-  struct NvwalMdsBuffer** buffer)
-{
-  /* TODO: implementn me */
-  return 0;
-}
-
-
-nvwal_error_t mds_bufmgr_read_page(
-  struct NvwalMdsBufferManagerContext* bufmgr, 
-  struct PageFile* file, 
-  page_no_t page_no, 
-  struct NvwalMdsBuffer** buffer) 
-{
-  /* TODO: implement me */
-  return 0;
-}
-
-
 /**
  * @brief Allocates and buffers a page.
  * 
@@ -615,6 +582,22 @@ nvwal_error_t mds_bufmgr_read_page(
  * will hold the page. We lazily allocate the page in the page-file by 
  * allocating and writing the page when we finally evict it from the 
  * buffer.
+ *
+ * Linearization point with respect to readers: 
+ * It's possible that while a concurrent reader finds and tries to read an 
+ * epoch from a page buffered in durable nvram buffer, we evict and recycle 
+ * the buffered page.
+ * To help readers detect this case, after we evict a page and before we 
+ * recycle the buffer, we assign the page number of the buffer page based to 
+ * the new buffered page. 
+ * Since page numbers increase monotonically, a reader can detect a page 
+ * recycle by first reading the page number of the buffer before reading the 
+ * buffered epoch, then read the epoch, and finally re-read the page number 
+ * to ensure that the buffered page has not been recycled.
+ * 
+ * Linearization point with respect to crashes:
+ * We only recycle a buffered page after evicting and syncing the page on the 
+ * page file.
  */
 nvwal_error_t mds_bufmgr_alloc_page(
   struct NvwalMdsBufferManagerContext* bufmgr, 
@@ -759,28 +742,132 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
 }
 
 
-void mds_read_epoch(
-  struct NvwalContext* wal, 
-  nvwal_epoch_t epoch_id, 
-  struct MdsEpochMetadata* epoch_metadata)
-{
-  /*
-   TODO: 
-    - we do optimistic reads 
-    - if the epoch is found in a durable nvram buffer then it's possible that while we 
-      read an epoch the buffered page gets evicted and recycled. 
-      We address this case by reading the page number of the buffer, read the 
-      epoch, and then re-read the page number to ensure that the buffered page has not 
-      been recycled.
-      This means that after we evict a page, before we recycle the buffer, we assign
-      the page number of the page based on the new page number we need to buffer. 
-      This serves as the linearization point with respect to readers. 
-      The linearization point with respect to crashes is ...?
-      We only infer page numbers from epochs stored in a page during recovery.
-   */
-  assert(0 && "Implement me");
+nvwal_epoch_t min_epoch_id(nvwal_epoch_t a, nvwal_epoch_t b) 
+{ 
+  return (a < b) ? a : b; 
 }
 
+nvwal_error_t mds_epoch_iterator_prefetch(
+  struct MdsEpochIterator* iterator)
+{
+  struct NvwalContext* wal = iterator->wal_;
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
+
+  nvwal_epoch_t cur_epoch_id = iterator->cur_epoch_id_;
+  file_no_t file_no = epoch_id_to_file_no(mds, cur_epoch_id);
+  page_no_t page_no = epoch_id_to_page_no(mds, cur_epoch_id);
+  struct PageFile* file = mds_io_file(&mds->io_, file_no);
+
+  struct NvwalMdsBuffer* nvbuf = bufmgr->write_buffers_[file->file_no_];
+  page_no_t nvbuf_page_no = nvwal_atomic_load(&nvbuf->page_no_);
+
+  /* Try reading from nvram buffer. */
+  if (nvbuf_page_no == page_no) {
+    /* 
+     * Optimistically read from the nvram buffer.
+     * Comments under mds_bufmgr_alloc_page explain the linearization point. 
+     */
+    struct Page* page = mds_bufmgr_page(nvbuf);
+    page_offset_t epoch_off = epoch_id_to_page_offset(mds, cur_epoch_id);
+    memcpy(&iterator->buffer_.epoch_metadata_[0], &page->epochs_[epoch_off], sizeof(*iterator->epoch_metadata_));
+    nvbuf_page_no = nvwal_atomic_load(&nvbuf->page_no_);
+    /* Verify page didn't get evicted concurrently while reading */
+    if (nvbuf_page_no == page_no) {
+      iterator->buffer_.num_entries_ = 1;
+      iterator->epoch_metadata_ = &iterator->buffer_.epoch_metadata_[0];
+      return 0;
+    }
+  }
+
+  /* 
+   * Otherwise, try reading from the prefetch buffer or prefetch from 
+   * the page file.
+   */
+  if (iterator->buffer_.num_entries_ > 0) {
+    nvwal_epoch_t first_epoch_id = iterator->buffer_.epoch_metadata_[0].epoch_id_;
+    nvwal_epoch_t last_epoch_id = iterator->buffer_.epoch_metadata_[iterator->buffer_.num_entries_-1].epoch_id_;
+    if (cur_epoch_id >= first_epoch_id && cur_epoch_id <= last_epoch_id)
+    {
+      int idx = cur_epoch_id - first_epoch_id;
+      iterator->epoch_metadata_ = &iterator->buffer_.epoch_metadata_[idx];
+      return 0;
+    }
+  } 
+
+  /* 
+   * Prefetch from page file. 
+   */
+
+  /* We never prefetch past a page boundary to simplify implementation. */
+  nvwal_epoch_t max_prefetchable_epoch_id = (page_no + 1) * max_epochs_per_page(mds);
+
+  nvwal_epoch_t lower_epoch_id = cur_epoch_id;
+  nvwal_epoch_t upper_epoch_id = 
+    min_epoch_id(min_epoch_id(cur_epoch_id + kNvwalMdsReadPrefetch - 1, iterator->end_epoch_id_), 
+                 max_prefetchable_epoch_id);
+  
+  int num_entries = upper_epoch_id - lower_epoch_id + 1;
+
+  nvwal_error_t ret = 
+    mds_io_pread(file, &iterator->buffer_.epoch_metadata_, 
+      num_entries * sizeof(struct MdsEpochMetadata), epoch_id_to_file_offset(mds, lower_epoch_id));
+  assert(ret == 0);
+  iterator->buffer_.num_entries_ = num_entries;
+  iterator->epoch_metadata_ = &iterator->buffer_.epoch_metadata_[0];
+
+  return 0;
+}
+
+
+nvwal_error_t mds_epoch_iterator_init(
+  struct NvwalContext* wal, 
+  nvwal_epoch_t begin_epoch_id, 
+  nvwal_epoch_t end_epoch_id,
+  struct MdsEpochIterator* iterator)
+{
+  nvwal_error_t ret;
+
+  if (end_epoch_id < begin_epoch_id) {
+    ret = EINVAL;
+    goto error_return;
+  }
+
+  iterator->wal_ = wal;
+  iterator->begin_epoch_id_ = begin_epoch_id;
+  iterator->end_epoch_id_ = end_epoch_id;
+  iterator->cur_epoch_id_ = begin_epoch_id;
+  memset(&iterator->buffer_, 0, sizeof(iterator->buffer_));
+
+  mds_epoch_iterator_prefetch(iterator);
+
+  return 0;  
+
+error_return:
+  errno = ret;
+  return ret;
+}
+
+
+void mds_epoch_iterator_next(struct MdsEpochIterator* iterator)
+{
+  iterator->cur_epoch_id_++;
+  if (iterator->cur_epoch_id_ <= iterator->end_epoch_id_) {
+    mds_epoch_iterator_prefetch(iterator);
+  }
+}
+
+
+int mds_epoch_iterator_done(struct MdsEpochIterator* iterator)
+{
+  return (iterator->cur_epoch_id_ > iterator->end_epoch_id_);
+}
+
+
+nvwal_error_t mds_epoch_iterator_destroy(struct MdsEpochIterator* iterator)
+{
+
+}
 
 nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal)
 {

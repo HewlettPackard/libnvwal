@@ -306,6 +306,12 @@ enum NvwalConstants {
    * @brief Largest number of pages being buffered for reading.
    */
   kNvwalMdsMaxBufferPages = 1U,
+
+  /**
+   * @brief Number of epoch entries to prefetch when reading from 
+   * page file.
+   */
+  kNvwalMdsReadPrefetch = 16U,
 };
 
 /**
