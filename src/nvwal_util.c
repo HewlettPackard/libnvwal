@@ -40,6 +40,23 @@ nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param) {
   return EINVAL;
 }
 
+nvwal_error_t nvwal_raise_einval_cstr(const char* message, const char* param) {
+  fprintf(stderr, message, param);
+  errno = EINVAL;
+  return EINVAL;
+}
+
+void nvwal_output_warning(const char* message) {
+  fprintf(stdout, message);
+}
+void nvwal_output_warning_llu(const char* message, uint64_t param) {
+  fprintf(stdout, message, param);
+}
+void nvwal_output_warning_cstr(const char* message, const char* param) {
+  fprintf(stdout, message, param);
+}
+
+
 nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code) {
   if (new_code) {
     return new_code;
@@ -156,6 +173,63 @@ nvwal_error_t nvwal_open_and_syncfs(const char* path) {
   return ret;
 }
 
+nvwal_error_t nvwal_remove_all_under(const char* path) {
+  const uint32_t path_len = strnlen(path, kNvwalMaxPathLength);
+  if (path_len >= kNvwalMaxPathLength) {
+    /** For simplicity (laziness) we assume this below. */
+    return nvwal_raise_einval("Error: nvwal_remove_all_under() encountered too long path");
+  }
+
+  DIR* dir = opendir(path);
+  if (dir) {
+    nvwal_error_t ret = 0;
+    char child_path[kNvwalMaxPathLength];
+    memcpy(child_path, path, path_len);
+    child_path[path_len] = '/';
+    while (1) {
+      struct dirent* ent = readdir(dir);
+      if (ent) {
+        /** Ignore "." and ".." */
+        if (strncmp(ent->d_name, ".", 1) == 0
+          || strncmp(ent->d_name, "..", 2) == 0) {
+          continue;
+        }
+
+        /** Recurse... */
+        const uint32_t child_len
+          = strnlen(ent->d_name, kNvwalMaxPathLength);
+        if (path_len + 1 + child_len > kNvwalMaxPathLength) {
+          return nvwal_raise_einval(
+            "Error: nvwal_remove_all_under() encountered too long path");
+        }
+        memcpy(child_path + path_len + 1, ent->d_name, child_len);
+        child_path[path_len + 1 + child_len] = '\0';
+        ret = nvwal_remove_all_under(child_path);
+        if (ret) {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+    closedir(dir);
+    return ret;
+  } else {
+    errno = ENOENT;
+    return ENOENT;
+  }
+}
+
+
+uint8_t nvwal_is_valid_dir(const char* path) {
+  DIR* dir = opendir(path);
+  if (dir) {
+    closedir(dir);
+    return 1U;
+  } else {
+    return 0U;
+  }
+}
 
 uint8_t nvwal_is_nonempty_dir(const char* path) {
   DIR* dir = opendir(path);

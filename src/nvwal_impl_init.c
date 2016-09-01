@@ -143,21 +143,13 @@ void remove_trailing_slash(char* path, uint16_t* len) {
   }
 }
 
-nvwal_error_t nvwal_impl_init(
-  const struct NvwalConfig* given_config,
-  enum NvwalInitMode mode,
-  struct NvwalContext* wal) {
-  struct NvwalWriterContext* writer;
-  struct NvwalConfig* config;
-  /** otherwise the following memzero will also reset config, ouch */
-  config = &(wal->config_);
-  if (config == given_config) {
-    return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
-  }
-
-  memset(wal, 0, sizeof(*wal));
-  memcpy(config, given_config, sizeof(*config));
-
+/**
+ * Simple standalone pre-screening checks/adjustments on the given config.
+ * This is the first step in nvwal_init().
+ */
+nvwal_error_t sanity_check_config(
+  struct NvwalConfig* config,
+  enum NvwalInitMode mode) {
   /** Check/adjust nv_root/disk_root */
   config->nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
   config->disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
@@ -180,6 +172,16 @@ nvwal_error_t nvwal_impl_init(
   }
   remove_trailing_slash(config->nv_root_, &config->nv_root_len_);
   remove_trailing_slash(config->disk_root_, &config->disk_root_len_);
+
+  if (!nvwal_is_valid_dir(config->nv_root_)) {
+    return nvwal_raise_einval_cstr(
+      "Error: Specified nv_root '%s' is not a valid folder\n",
+      config->nv_root_);
+  } else if (!nvwal_is_valid_dir(config->disk_root_)) {
+    return nvwal_raise_einval_cstr(
+      "Error: Specified disk_root '%s' is not a valid folder\n",
+      config->disk_root_);
+  }
 
   /** Check writer_count, writer_buffer_size, writer_buffers */
   if (config->writer_count_ == 0 || config->writer_count_ > kNvwalMaxWorkers) {
@@ -206,19 +208,91 @@ nvwal_error_t nvwal_impl_init(
   if (config->segment_size_ == 0) {
     config->segment_size_ = kNvwalDefaultSegmentSize;
   }
-  wal->segment_count_ = config->nv_quota_ / config->segment_size_;
+  uint64_t segment_count_ = config->nv_quota_ / config->segment_size_;
   if (config->nv_quota_ % config->segment_size_ != 0) {
     return nvwal_raise_einval(
       "Error: nv_quota must be a multiply of segment size\n");
-  } else if (wal->segment_count_ < 2U) {
+  } else if (segment_count_ < 2U) {
     return nvwal_raise_einval(
       "Error: nv_quota must be at least of two segments\n");
-  } else if (wal->segment_count_ > kNvwalMaxActiveSegments) {
+  } else if (segment_count_ > kNvwalMaxActiveSegments) {
     return nvwal_raise_einval_llu(
       "Error: nv_quota must be at most %llu segments\n",
       (uint64_t) kNvwalMaxActiveSegments);
   }
 
+  if (mode != kNvwalInitRestart
+    && mode != kNvwalInitCreateIfNotExists
+    && mode != kNvwalInitCreateTruncate) {
+    return nvwal_raise_einval_llu(
+      "Error: Invalid value of init mode: %llu\n",
+      (uint64_t) mode);
+  }
+
+  if (mode == kNvwalInitCreateTruncate
+    && config->resuming_epoch_ != kNvwalInvalidEpoch) {
+    /** This could be just a warning.. so far an error */
+    return nvwal_raise_einval(
+      "Error: No point to specify resuming_epoch in CreateTruncate mode\n");
+  }
+
+  if (mode == kNvwalInitRestart) {
+    /**
+     * kNvwalInitRestart assumes the folder contains an existing WAL remnant.
+     */
+    if (!nvwal_is_nonempty_dir(config->nv_root_)) {
+      return nvwal_raise_einval_cstr(
+        "Error: Init mode is kNvwalInitRestart, but nv_root '%s' has no files\n",
+        config->nv_root_);
+    } else if (!nvwal_is_nonempty_dir(config->disk_root_)) {
+      return nvwal_raise_einval_cstr(
+        "Error: Init mode is kNvwalInitRestart, but disk_root '%s' has no files\n",
+        config->disk_root_);
+    }
+  } else if (mode == kNvwalInitCreateTruncate) {
+    /**
+     * Truncate just nukes everything there, but let's print out a warning.
+     * If there are some files, it might potentially be a misuse.
+     */
+    if (nvwal_is_nonempty_dir(config->nv_root_)) {
+      nvwal_output_warning_cstr(
+        "Warning: Init mode is CreateTruncate, but nv_root '%s' has some files.\n"
+        " These files will be deleted. Is it really what you inteded?\n",
+        config->nv_root_);
+    }
+    if (nvwal_is_nonempty_dir(config->disk_root_)) {
+      nvwal_output_warning_cstr(
+        "Warning: Init mode is CreateTruncate, but disk_root_ '%s' has some files.\n"
+        " These files will be deleted. Is it really what you inteded?\n",
+        config->disk_root_);
+    }
+  }
+
+  return 0;
+}
+
+nvwal_error_t nvwal_impl_init(
+  const struct NvwalConfig* given_config,
+  enum NvwalInitMode mode,
+  struct NvwalContext* wal) {
+  /** otherwise the following memzero will also reset config, ouch */
+  struct NvwalConfig* config = &(wal->config_);
+  if (config == given_config) {
+    return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
+  }
+
+  memset(wal, 0, sizeof(*wal));
+  memcpy(config, given_config, sizeof(*config));
+
+  NVWAL_CHECK_ERROR(sanity_check_config(config, mode));
+
+  /** CreateTruncate is same as Create except it nukes everything first. */
+  if (mode == kNvwalInitCreateTruncate) {
+    NVWAL_CHECK_ERROR(nvwal_remove_all_under(config->nv_root_));
+    NVWAL_CHECK_ERROR(nvwal_remove_all_under(config->disk_root_));
+  }
+
+  wal->segment_count_ = config->nv_quota_ / config->segment_size_;
   if (config->resuming_epoch_ == kNvwalInvalidEpoch) {
     config->resuming_epoch_ = 1;
   }
@@ -228,7 +302,7 @@ nvwal_error_t nvwal_impl_init(
 
   /** TODO we should retrieve from MDS in restart case */
   for (uint32_t i = 0; i < config->writer_count_; ++i) {
-    writer = wal->writers_ + i;
+    struct NvwalWriterContext* writer = wal->writers_ + i;
     writer->parent_ = wal;
     writer->oldest_frame_ = 0;
     writer->active_frame_ = 0;
