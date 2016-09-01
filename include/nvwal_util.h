@@ -36,6 +36,19 @@ nvwal_error_t nvwal_raise_einval(const char* message);
 
 nvwal_error_t nvwal_raise_einval_llu(const char* message, uint64_t param);
 
+nvwal_error_t nvwal_raise_einval_cstr(const char* message, const char* param);
+
+/**
+ * These are just warning, do not stop anything.
+ * We need to determine whether we should output to files or stdout or stderr...
+ * and whether/how we wipe them off completely based on build type, severity level etc..
+ * The implementation will be changed. Nevertheless, we should
+ * use these methods rather than printf/fprintf all over the place.
+ */
+void nvwal_output_warning(const char* message);
+void nvwal_output_warning_llu(const char* message, uint64_t param);
+void nvwal_output_warning_cstr(const char* message, const char* param);
+
 /**
  * @brief A frequently occurring pattern in our code to construct a file name
  * from a common prefix and fixed-size hex string.
@@ -84,6 +97,20 @@ nvwal_error_t nvwal_open_and_fsync(const char* path);
 nvwal_error_t nvwal_open_and_syncfs(const char* path);
 
 /**
+ * Deletes all files/folders recursively under the given folder.
+ * The folder itself is not removed.
+ * @param[in] path Folder path. This method can't handle a folder whose path
+ * or its descendants' path is kNvwalMaxPathLength or longer.
+ */
+nvwal_error_t nvwal_remove_all_under(const char* path);
+
+/**
+ * @returns Whether we coulf confirm that the given path represents a valid folder.
+ * Returns 0 in all other cases, including the folder doesn't exist, any I/O error.
+ */
+uint8_t nvwal_is_valid_dir(const char* path);
+
+/**
  * @returns Whether the given path represents a valid folder with at least one child.
  * Returns 0 in all other cases, including the folder doesn't exist, any I/O error.
  */
@@ -112,6 +139,8 @@ void nvwal_circular_memcpy(
  */
 #define NVWAL_MAX(a,b) (((a) > (b)) ? (a) : (b))
 #define NVWAL_MIN(a,b) (((a) < (b)) ? (a) : (b))
+
+#define NVWAL_CHECK_ERROR(X) { nvwal_error_t __x = X; if (__x) { return __x; } }
 
 /** @} */
 
