@@ -286,9 +286,9 @@ enum NvwalConstants {
   kNvwalEpochFrameCount = 5,
 
   /**
-   * Number of epochs to prefetch when calling get_next_epoch()
+   * Number of mmappings maintained per reader.
    */
-  kNvwalPrefetchLength = 5,
+  kNvwalNumReadRegions = 2,
 
   /**
    * @brief Default page size in bytes for meta-data store.
@@ -594,22 +594,39 @@ struct NvwalMdsContext {
 };
 
 /**
+ * @brief Information about one mmapped region. This region may contain more
+ * than one epoch. We rely on MDS lookup to find epoch boundaries within a
+ * region, if that happens to be the case.
+ */
+struct NvwalEpochMapMetadata {
+  nvwal_dsid_t seg_id_start_; /* The first segment we mmapped for this get_epoch call */
+  nvwal_dsid_t seg_id_end_; /* The last segment we tried to mmap */
+  uint32_t seg_start_offset_;
+  uint32_t seg_end_offset_;
+  nvwal_byte_t* mmap_start_; /* Remember our mmap info for munmap later */
+  uint64_t mmap_len_; /* We only remember info for one mapping. If the epoch needs
+                      * multiple mappings, unmap the previous mapping before
+                      * mapping the next chunk. */ 
+};
+
+/**
  * @brief Represents the context of the reading API for retrieving prior
  * epoch data. Must be initialized/uninitialized via nvwal_reader_init()
  * and nvwal_reader_uninit().
  */
-struct NvwalReaderContext {
+struct NvwalLogCursor {
   struct NvwalContext* wal_;
-  nvwal_epoch_t prev_epoch_; /* The epoch most recently requested and fetched */
-  nvwal_epoch_t tail_epoch_; /* The largest epoch number we've prefetched */
+  nvwal_epoch_t current_epoch_;
   uint8_t fetch_complete_; /* Do we have to break the epoch into multiple mappings? */
-  nvwal_dsid_t seg_id_; /* The last segment we tried to mmap */
-  char *mmap_start_; /* Remember our mmap info for munmap later */
-  uint64_t mmap_len_; /* We only remember info for one mapping. If the epoch needs
-                      * multiple mappings, unmap the previous mapping before
-                      * mapping the next chuck. */ 
+  uint8_t prefetch_complete_; /* Did we stop in the middle of mapping a future desired epoch? */
+  nvwal_byte_t* data_;
+  uint64_t data_len_;
+  nvwal_epoch_t start_epoch_; /* First epoch requested in the range */
+  nvwal_epoch_t end_epoch_; /* Last epoch requested in the range */
+  int8_t current_map_;
+  int8_t free_map_;
+  struct NvwalEpochMapMetadata read_metadata_[2]; /* Metadata about fetched/prefetched regions */
 };
-
 /**
  * @brief Represents a context of \b one stream of write-ahead-log placed in
  * NVDIMM and secondary device.
@@ -692,10 +709,6 @@ struct NvwalContext {
    */
   struct NvwalMdsContext mds_;
 
-  /**
-   * Reader context
-   */
-  struct NvwalReaderContext reader_;
 };
 
 /** @} */
