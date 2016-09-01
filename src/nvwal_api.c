@@ -715,7 +715,7 @@ nvwal_error_t get_epoch(
       }
       /* We successfully mapped part of the target epoch. Update the cursor. */
       cursor->current_epoch_ = epoch_to_map;
-      epoch_map->mmap_start_ = buf;
+      epoch_map->mmap_start_ = (nvwal_byte_t*)buf;
     } else
     {
       char* fixed_map = mmap(mmap_addr, map_len, PROT_READ, MAP_SHARED|MAP_FIXED, fd, 0);
@@ -881,42 +881,69 @@ nvwal_error_t nvwal_cursor_next_epoch(
   } else
   {
     //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
+    /* If we are calling again and we didn't complete the fetch of current_epoch_, we must
+     * have consumed all of read_metadata[current_map]*/
+    cursor->current_map_++;
+    cursor->current_map_ = cursor->current_map_%kNvwalNumReadRegions;
   }
   /* Is at least part of the desired epoch already fetched? */
-  if (NULL != cursor->read_metadata_[cursor->current_map_].mmap_start_)
+  struct NvwalEpochMapMetadata* epoch_map = cursor->read_metadata_ + cursor->current_map_;
+  /* If we have part of the epoch in epoch_map, we have the following cases:
+   * case 1: epoch_map contains the start of the epoch but not the end,
+   * case 2: epoch map_contains that start and end of the epoch,
+   * case 3: epoch_map contains the middle of the epoch (neither start nor end),
+   * case 4: epoch_map contains the end of the epoch.
+   */
+  /*if map valid, look at read_metadata[current_map] and return if found */
+  if (NULL != epoch_map->mmap_start_)
   {
-    /*if map valid, look at read_metadata[current_map] and return if found */
-    struct NvwalEpochMapMetadata* epoch_map = cursor->read_metadata_ + cursor->current_map_;
-    if ((epoch_meta.from_seg_id_ < epoch_map->seg_id_end_) &&
-       (epoch_meta.from_offset_ < epoch_map->seg_end_offset_))
+    uint64_t logical_map_start = epoch_map->seg_id_start_*wal->config_.segment_size_ 
+                                 + epoch_map->seg_start_offset_;
+    uint64_t logical_map_end = epoch_map->seg_id_end_*wal->config_.segment_size_ 
+                               + epoch_map->seg_end_offset_;
+    uint64_t logical_epoch_start = epoch_meta.from_seg_id_*wal->config_.segment_size_ 
+                                   + epoch_meta.from_offset_;
+    uint64_t logical_epoch_end = epoch_meta.to_seg_id_*wal->config_.segment_size_ 
+                                 + epoch_meta.to_off_;
+    
+    if (cursor->fetch_complete_)
     {
-      /* update cursor->data and data_length */
-      /* if the entire epoch is captured in this mapping, fetch_complete = 1 */
+      /* We are looking for the beginning of epoch_meta.epoch_id_ */
+      cursor->data_ = epoch_map->mmap_start_ + logical_epoch_start - logical_map_start;
+      /* Is the end of the epoch in this mapping? */
+      if (logical_epoch_end <= logical_map_end)
+      {
+        /* case 2 */
+        cursor->data_len_ = logical_epoch_end - logical_epoch_start;
+        cursor->fetch_complete_ = 1;
+      } else
+      {
+        /* case 1 */
+        cursor->data_len_ = logical_map_end - logical_epoch_start;
+        cursor->fetch_complete_ = 0;
+      }
+    } else
+    {
+      cursor->data_ = epoch_map->mmap_start_;
+      if (logical_epoch_end <= logical_map_end)
+      {
+        /* case 4 */
+        cursor->data_len_ = logical_epoch_end - logical_map_start;
+        cursor->fetch_complete_ = 1;
+      } else
+      {
+        /* case 3 */
+        cursor->data_len_ = logical_map_end;
+        cursor->fetch_complete_ = 0;
+      }
     }
-    /* for now, we only maintain one mmap region */
-     //else
-    //{
-      /* if not found, current_map+. if it is not in the current region, it must
-       * be in the next, right? No, we must look at all of our prefetched map regions
-       * For now, we will only maintain two mmap regions*/
-      //cursor->current_map++;
-      //if (NULL != cursor->read_metadata[current_map].mmap_start)
-      //{
-      /*if map valid, look at read_metadata[current_map] and return if found */
-     //   if (1)
-      //  {
-
-        //}
-      //}
-   // }
-
+    cursor->current_epoch_ = epoch_meta.epoch_id_;
   } else
   {
     /* else go fetch it (and possibly more). */
     error_code = get_epoch(wal, cursor, epoch_meta);
   }
 
-  //cursor->current_epoch = epoch_meta.epoch_id_;
 
   return error_code;
 

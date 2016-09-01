@@ -597,7 +597,7 @@ struct NvwalEpochMapMetadata {
   nvwal_dsid_t seg_id_end_; /* The last segment we tried to mmap */
   uint32_t seg_start_offset_;
   uint32_t seg_end_offset_;
-  char *mmap_start_; /* Remember our mmap info for munmap later */
+  nvwal_byte_t* mmap_start_; /* Remember our mmap info for munmap later */
   uint64_t mmap_len_; /* We only remember info for one mapping. If the epoch needs
                       * multiple mappings, unmap the previous mapping before
                       * mapping the next chunk. */ 
