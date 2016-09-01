@@ -165,7 +165,6 @@ TEST(NvwalMdsTest, ReadEpochOnePage)
   EXPECT_EQ(0, context.uninit_all());
 }
 
-
 TEST(NvwalMdsTest, ReadEpochTwoPages)
 {
   MdsTestContext context(1);
