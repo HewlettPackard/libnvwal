@@ -189,7 +189,7 @@ inline struct NvwalMdsPageFile* mds_io_file(
   struct NvwalMdsIoContext* io, 
   file_no_t file_no)
 {
-  if (file_no > kNvwalMdsMaxActivePagefiles - 1) {
+  if (file_no > kNvwalMdsMaxPagefiles - 1) {
     return NULL;
   }
   return &io->files_[file_no];
@@ -295,7 +295,6 @@ nvwal_error_t mds_io_init(
   int* did_restart)
 {
   nvwal_error_t ret;
-  struct NvwalMdsPageFile* pf;
 
   struct NvwalMdsContext* mds = &(wal->mds_);
   struct NvwalMdsIoContext* io = &(mds->io_);
@@ -308,26 +307,24 @@ nvwal_error_t mds_io_init(
 
   /* Check if there are any existing files */  
   int num_existing = 0;
-  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+  for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
     int exists = mds_io_file_exists(io, i);
     num_existing += exists;
   }
 
   /* Attempt to restart from existing files */
   if ((mode == kNvwalInitRestart && 
-       num_existing == kNvwalMdsMaxActivePagefiles) || 
+       num_existing == kNvwalMdsMaxPagefiles) || 
       (mode == kNvwalInitCreateIfNotExists && 
-       num_existing == kNvwalMdsMaxActivePagefiles))
+       num_existing == kNvwalMdsMaxPagefiles))
   {
-    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
       ret = mds_io_open_file(io, i);
       if (ret != 0) {
-        printf("ERROR: 1\n");
         goto error_return;
       }
       ret = mds_io_recovery_complete_append_page(io, i);
       if (ret != 0) {
-        printf("ERROR: 2\n");
         goto error_return;
       }
     }
@@ -339,7 +336,7 @@ nvwal_error_t mds_io_init(
   if (mode == kNvwalInitCreateIfNotExists && 
       num_existing == 0)
   {
-    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
       ret = mds_io_create_file(io, i);
       if (ret != 0) {
         goto error_return;
@@ -361,7 +358,7 @@ nvwal_error_t mds_io_uninit(struct NvwalContext* wal)
   struct NvwalMdsContext* mds = &(wal->mds_);
   struct NvwalMdsIoContext* io = &(mds->io_);
 
-  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+  for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
     if (io->files_[i].active_) {
       mds_io_close_file(io, i);
     }
@@ -582,18 +579,18 @@ nvwal_error_t mds_bufmgr_init(
 
   /* Check if there are any existing buffers */  
   int num_existing = 0;
-  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+  for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
     int exists = nvram_buffer_file_exists(bufmgr, i);
     num_existing += exists;
   }
 
   /* Attempt to restart from existing buffers */
   if ((mode == kNvwalInitRestart && 
-       num_existing == kNvwalMdsMaxActivePagefiles) ||
+       num_existing == kNvwalMdsMaxPagefiles) ||
       (mode == kNvwalInitCreateIfNotExists && 
-       num_existing == kNvwalMdsMaxActivePagefiles))
+       num_existing == kNvwalMdsMaxPagefiles))
   {
-    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
       ret = mds_bufmgr_map_nvram_buffer(bufmgr, i);
       if (ret != 0) {
         goto error_return;
@@ -607,7 +604,7 @@ nvwal_error_t mds_bufmgr_init(
   if (mode == kNvwalInitCreateIfNotExists && 
       num_existing == 0)
   {
-    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
       ret = mds_bufmgr_create_nvram_buffer(bufmgr, i);
       if (ret != 0) {
         goto error_return;
@@ -632,7 +629,7 @@ nvwal_error_t mds_bufmgr_uninit(
   struct NvwalMdsContext* mds = &(wal->mds_);
   struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
  
-  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+  for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
     buffer = &bufmgr->write_buffers_[i];
     ret = unmap_nvram_buffer_file(bufmgr, buffer->baseaddr_);
     if (ret != 0) {
@@ -751,13 +748,6 @@ static nvwal_epoch_t mds_latest_epoch_in_page(
 }
 
 
-
-nvwal_epoch_t min_epoch_id(nvwal_epoch_t a, nvwal_epoch_t b) 
-{ 
-  return (a < b) ? a : b; 
-}
-
-
 /**
  * @brief Performs recovery of the metadata store. 
  *
@@ -773,7 +763,7 @@ static nvwal_error_t mds_recover(struct NvwalContext* wal)
   struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
   nvwal_epoch_t latest_epoch;
 
-  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+  for (i=0; i<kNvwalMdsMaxPagefiles; i++) {
     struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, i);
     struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[i];
     struct Page* page = mds_bufmgr_page(buffer);
@@ -790,6 +780,26 @@ static nvwal_error_t mds_recover(struct NvwalContext* wal)
   return 0;
 }
 
+/**
+ * Simple standalone pre-screening checks/adjustments on the given config.
+ * This is the first step in mds_init().
+ */
+static nvwal_error_t sanity_check_config(
+  struct NvwalConfig* config,
+  enum NvwalInitMode mode) 
+{
+  if (config->mds_page_size_ % 512 != 0) {
+    return nvwal_raise_einval(
+      "Error: mds_page_size_ must be a multiple of 512\n");
+  }
+  if (config->mds_page_size_ == 0) {
+    config->mds_page_size_ = kNvwalMdsPageSize;
+  }
+
+  return 0;
+}
+
+
 nvwal_error_t mds_init(
   enum NvwalInitMode mode,
   struct NvwalContext* wal) 
@@ -797,17 +807,16 @@ nvwal_error_t mds_init(
   nvwal_error_t ret;
   nvwal_error_t ret2;
 
-  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalConfig* config = &(wal->config_);
+  NVWAL_CHECK_ERROR(sanity_check_config(config, mode));
 
+  struct NvwalMdsContext* mds = &(wal->mds_);
   memset(mds, 0, sizeof(*mds));
 
   mds->wal_ = wal;
 
   int io_did_restart;
-  ret = mds_io_init(mode, wal, &io_did_restart);
-  if (ret != 0) {
-    goto error_return;
-  }
+  NVWAL_CHECK_ERROR(mds_io_init(mode, wal, &io_did_restart));
 
   int bufmgr_did_restart;
   ret = mds_bufmgr_init(mode, wal, &bufmgr_did_restart);
@@ -911,8 +920,8 @@ nvwal_error_t mds_epoch_iterator_prefetch(
 
   nvwal_epoch_t lower_epoch_id = cur_epoch_id;
   nvwal_epoch_t upper_epoch_id = 
-    min_epoch_id(min_epoch_id(cur_epoch_id + kNvwalMdsReadPrefetch - 1, iterator->end_epoch_id_), 
-                 max_prefetchable_epoch_id);
+    NVWAL_MIN(NVWAL_MIN(cur_epoch_id + kNvwalMdsReadPrefetch - 1, iterator->end_epoch_id_), 
+              max_prefetchable_epoch_id);
   
   int num_entries = upper_epoch_id - lower_epoch_id + 1;
 

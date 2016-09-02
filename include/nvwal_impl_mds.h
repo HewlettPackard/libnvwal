@@ -88,7 +88,7 @@ static inline int max_epochs_per_page(struct NvwalMdsContext* mds)
 static inline file_no_t epoch_id_to_file_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
   uint64_t page_offset = normalize_epoch_id(epoch_id) / max_epochs_per_page(mds);
-  return page_offset % kNvwalMdsMaxActivePagefiles;
+  return page_offset % kNvwalMdsMaxPagefiles;
 }
 
 /**
@@ -98,7 +98,7 @@ static inline file_no_t epoch_id_to_file_no(struct NvwalMdsContext* mds, nvwal_e
 static inline page_no_t epoch_id_to_page_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
   assert(epoch_id != kNvwalInvalidEpoch);
-  page_no_t page_no = normalize_epoch_id(epoch_id) / (max_epochs_per_page(mds) * kNvwalMdsMaxActivePagefiles);
+  page_no_t page_no = normalize_epoch_id(epoch_id) / (max_epochs_per_page(mds) * kNvwalMdsMaxPagefiles);
   return page_no;
 }
 

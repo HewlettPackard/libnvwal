@@ -56,15 +56,15 @@ nvwal_error_t mds_init(
 /**
  * @brief Uninitializes the metadata store.
  *
- * @param[in] wal nvwal context 
+ * @param[in] wal WAL context instance.
  */
 nvwal_error_t mds_uninit(struct NvwalContext* wal);
 
 /**
  * @brief Writes epoch \a epoch_metadata.
  *
- * @param[in] wal nvwal context
- * @param[in] epoch_metadata epoch
+ * @param[in] wal WAL context instance.
+ * @param[in] epoch_metadata Epoch metadata to write.
  * 
  * @details
  * When the function returns successfully, the epoch metadata is 
@@ -77,12 +77,22 @@ nvwal_error_t mds_write_epoch(
 /**
  * @brief Returns identifier of latest durable epoch. 
  *
- * @param[in] wal nvwal context 
+ * @param[in] wal WAL context instance.
  */
 nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal);
 
 /**
- * TODO: describe me
+ * @brief Initializes an iterator instance to iterate over a given 
+ * range of epoch metadata.
+ *
+ * @param[in] wal WAL context instance.
+ * @param[in] begin_epoch_id Starting epoch of the range.
+ * @param[in] end_epoch_id Ending epoch of the range.
+ * @param[out] iterator The iterator instance to initialize.
+ * 
+ * @details
+ * The iterator member field epoch_metadata_ points to the current 
+ * epoch metadata.
  */
 nvwal_error_t mds_epoch_iterator_init(
   struct NvwalContext* wal, 
@@ -91,18 +101,23 @@ nvwal_error_t mds_epoch_iterator_init(
   struct MdsEpochIterator* iterator);
 
 /**
- * TODO: describe me
+ * @brief Advances iterator to the next epoch.
+ *
+ * @param[in] iterator The iterator instance to advance.
  */
 void mds_epoch_iterator_next(struct MdsEpochIterator* iterator);
 
 /**
- * TODO: describe me
+ * @brief Checks if iterator is passed the end of the epoch range.
+ * 
+ * @param[in] iterator The iterator instance to check.
  */
 int mds_epoch_iterator_done(struct MdsEpochIterator* iterator);
 
-
 /**
- * TODO: describe me
+ * @brief Destroys an iterator instance.
+ *
+ * @param[in] iterator The iterator instance to destroy.
  */
 nvwal_error_t mds_epoch_iterator_destroy(struct MdsEpochIterator* iterator);
 
