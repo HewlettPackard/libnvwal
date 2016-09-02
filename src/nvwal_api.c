@@ -55,6 +55,19 @@ nvwal_error_t nvwal_query_durable_epoch(
   return 0;
 }
 
+uint64_t nvwal_get_version() {
+  enum NvwalVersionNumber {
+    /**
+    * Version of the library.
+    * Whenever we [might] break compatibility of file formarts etc,
+    * we bump this up.
+    */
+    kNvwalBinaryVersion = 1,
+  };
+  return kNvwalBinaryVersion;
+}
+
+
 /**************************************************************************
  *
  *  Writers
@@ -697,7 +710,7 @@ nvwal_error_t get_epoch(
       if (MAP_FAILED == buf)
       {
         /* Pretty bad to fail on the first attempt while letting the kernel pick */
-        error_code = MAP_FAILED;
+        error_code = errno;
         if (cursor->current_epoch_ == epoch_to_map)
         {
           cursor->fetch_complete_ = 0;
@@ -722,7 +735,7 @@ nvwal_error_t get_epoch(
       close(fd);
       if (MAP_FAILED == fixed_map)
       {
-        error_code = MAP_FAILED;
+        error_code = errno;
         if (cursor->current_epoch_ == epoch_to_map)
         {
           cursor->fetch_complete_ = 0;
