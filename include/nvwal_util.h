@@ -65,6 +65,25 @@ void nvwal_concat_sequence_filename(
   uint32_t sequence,
   char* out);
 
+
+/**
+ * We should use this method in all places that construct
+ * a segment file on NVDIMM.
+ */
+void nvwal_construct_nv_segment_path(
+  const struct NvwalContext* wal,
+  uint32_t nv_segment_index,
+  char* out_nv_path);
+
+/**
+ * We should use this method in all places that construct
+ * a segment file on disk.
+ */
+void nvwal_construct_disk_segment_path(
+  const struct NvwalContext* wal,
+  nvwal_dsid_t dsid,
+  char* out_nv_path);
+
 /**
  * @brief Equivalent to open(2) with O_DIRECT flag.
  * @details

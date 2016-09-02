@@ -112,6 +112,30 @@ void nvwal_concat_sequence_filename(
   out[out_len] = '\0';
 }
 
+void nvwal_construct_nv_segment_path(
+  const struct NvwalContext* wal,
+  uint32_t nv_segment_index,
+  char* out_nv_path) {
+  assert(wal->config_.nv_root_len_ + 32U < kNvwalMaxPathLength);
+  nvwal_concat_sequence_filename(
+    wal->config_.nv_root_,
+    "nv_segment_",
+    nv_segment_index,
+    out_nv_path);
+}
+
+void nvwal_construct_disk_segment_path(
+  const struct NvwalContext* wal,
+  nvwal_dsid_t dsid,
+  char* out_nv_path) {
+  assert(wal->config_.disk_root_len_ + 32U < kNvwalMaxPathLength);
+  nvwal_concat_sequence_filename(
+    wal->config_.disk_root_,
+    "nvwal_ds_",
+    dsid,
+    out_nv_path);
+}
+
 int nvwal_open_best_effort_o_direct(
   const char* path,
   int oflag,

@@ -32,6 +32,7 @@
 #include "nvwal_mds.h"
 #include "nvwal_util.h"
 
+
 /**************************************************************************
  *
  *  Thread state-changes
@@ -131,11 +132,6 @@ void nvwal_impl_thread_state_stopped(uint8_t* thread_state) {
  *  NvwalContext Initializations
  *
  ***************************************************************************/
-
-/** subroutine of nvwal_init() used to create fresh new segment, not during restart */
-nvwal_error_t init_fresh_nvram_segment(
-  struct NvwalContext * wal,
-  struct NvwalLogSegment* segment);
 
 void remove_trailing_slash(char* path, uint16_t* len) {
   while ((*len) > 0 && path[(*len) - 1] == '/') {
@@ -386,8 +382,62 @@ nvwal_error_t check_adjust_on_prev_config(
       wal->prev_config_.writer_count_);
   }
 
+  /*
+   * nv_root, disk_root can change. We should be agnostic to where we are running,
+   * so we allow the user to migrate existing NVWAL folders to somewhere else.
+   * The only thing we check here is that the segment/MDS files exist there.
+   * NV-resident segment files are checked later by init_existing_nvram_segment().
+   * MDS files' integrity is checked during mds_init().
+   * Here we only check the existence/size of disk-resident segment files.
+   */
+  const nvwal_dsid_t max_dsid
+    = wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_;
+  for (nvwal_dsid_t i = 1; i <= max_dsid; ++i) {
+    char disk_path[kNvwalMaxPathLength];
+    nvwal_construct_disk_segment_path(
+      wal,
+      i,
+      disk_path);
+
+    /* we open it just to check */
+    uint64_t filesize = 0;
+    {
+      int fd = open(disk_path, O_RDONLY, 0);
+      if (fd == -1) {
+        return nvwal_raise_einval_cstr(
+          "Error: A disk-resident segment %s does not exist or is not readable\n",
+          disk_path);
+      }
+      assert(fd);
+
+      struct stat st;
+      if (fstat(fd, &st) == 0) {
+        filesize = st.st_size;
+      }
+      close(fd);
+    }
+
+    if (filesize != wal->config_.segment_size_) {
+      return nvwal_raise_einval_cstr(
+        "Error: A disk-resident segment %s has an incompatible filesize\n",
+        disk_path);
+    }
+  }
+
   return 0;
 }
+
+
+/** subroutine of nvwal_init() used to create fresh new segment, not during restart */
+nvwal_error_t init_fresh_nvram_segment(
+  struct NvwalContext * wal,
+  struct NvwalLogSegment* segment);
+
+
+/** subroutine of nvwal_init() used to load an existing segment during restart */
+nvwal_error_t init_existing_nvram_segment(
+  struct NvwalContext * wal,
+  struct NvwalLogSegment* segment);
 
 nvwal_error_t impl_init_no_error_handling(
   enum NvwalInitMode mode,
@@ -405,24 +455,36 @@ nvwal_error_t impl_init_no_error_handling(
   NVWAL_CHECK_ERROR(check_adjust_on_prev_config(wal));
 
   wal->segment_count_ = config->nv_quota_ / config->segment_size_;
-  if (config->resuming_epoch_ == kNvwalInvalidEpoch) {
-    config->resuming_epoch_ = 1;
+
+  /* Adjust resuming_epoch_ */
+  const nvwal_epoch_t prev_de = wal->nv_control_block_->flusher_progress_.durable_epoch_;
+  if (wal->config_.resuming_epoch_ == kNvwalInvalidEpoch
+    || wal->config_.resuming_epoch_ == prev_de) {
+    /* In most cases, the user won't specify resuming_epoch */
+    wal->durable_epoch_ = prev_de;
+    wal->stable_epoch_ = prev_de;
+    wal->next_epoch_ = nvwal_increment_epoch(prev_de);
+  } else {
+    /** Specified resuming_epoch... so far we only allow truncation. */
+    if (nvwal_is_epoch_after(wal->config_.resuming_epoch_, prev_de)) {
+      return nvwal_raise_einval_llu(
+        "Error: The specified resuming_epoch is after the durable epoch of"
+        " the existing libnvwal installaton (%llu). libnvwal so far allows"
+        " only truncation at startup, not rolling forward.\n",
+        prev_de);
+    }
+    wal->durable_epoch_ = wal->config_.resuming_epoch_;
+    wal->stable_epoch_ = wal->config_.resuming_epoch_;
+    wal->next_epoch_ = nvwal_increment_epoch(wal->config_.resuming_epoch_);
+    /** TODO invoke MDS to do truncation */
   }
-  wal->durable_epoch_ = config->resuming_epoch_;
-  wal->stable_epoch_ = config->resuming_epoch_;
-  wal->next_epoch_ = nvwal_increment_epoch(config->resuming_epoch_);
 
   /** TODO we should retrieve from MDS in restart case */
   for (uint32_t i = 0; i < config->writer_count_; ++i) {
     struct NvwalWriterContext* writer = wal->writers_ + i;
     writer->parent_ = wal;
-    writer->oldest_frame_ = 0;
-    writer->active_frame_ = 0;
     writer->writer_seq_id_ = i;
-    writer->last_tail_offset_ = 0;
-    writer->copied_offset_ = 0;
     writer->buffer_ = config->writer_buffers_[i];
-    memset(writer->epoch_frames_, 0, sizeof(writer->epoch_frames_));
   }
 
   /** TODO we must retrieve this from MDS in restart case */
@@ -436,7 +498,12 @@ nvwal_error_t impl_init_no_error_handling(
 
   /* Initialize all nv segments */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
-    NVWAL_CHECK_ERROR(init_fresh_nvram_segment(wal, wal->segments_ + i));
+    wal->segments_[i].nv_segment_index_ = i;
+    if (wal->prev_config_.libnvwal_version_) {
+      NVWAL_CHECK_ERROR(init_existing_nvram_segment(wal, wal->segments_ + i));
+    } else {
+      NVWAL_CHECK_ERROR(init_fresh_nvram_segment(wal, wal->segments_ + i));
+    }
   }
 
   /*
@@ -485,20 +552,12 @@ nvwal_error_t init_fresh_nvram_segment(
   struct NvwalContext* wal,
   struct NvwalLogSegment* segment) {
   char nv_path[kNvwalMaxPathLength];
-
-  assert(wal->config_.nv_root_len_ + 32U < kNvwalMaxPathLength);
   segment->dsid_ = wal->largest_dsid_ + 1;
   wal->largest_dsid_ = segment->dsid_;
   segment->nv_fd_ = 0;
   segment->nv_baseaddr_ = 0;
-
   segment->parent_ = wal;
-
-  nvwal_concat_sequence_filename(
-    wal->config_.nv_root_,
-    "nv_segment_",
-    segment->dsid_,
-    nv_path);
+  nvwal_construct_nv_segment_path(wal, segment->nv_segment_index_, nv_path);
 
   segment->nv_fd_ = nvwal_open_best_effort_o_direct(
     nv_path,
@@ -552,6 +611,55 @@ nvwal_error_t init_fresh_nvram_segment(
 
   return 0;
 }
+
+nvwal_error_t init_existing_nvram_segment(
+  struct NvwalContext* wal,
+  struct NvwalLogSegment* segment) {
+  char nv_path[kNvwalMaxPathLength];
+  segment->dsid_ = wal->largest_dsid_ + 1;
+  wal->largest_dsid_ = segment->dsid_;
+  segment->nv_fd_ = 0;
+  segment->nv_baseaddr_ = 0;
+  segment->parent_ = wal;
+  nvwal_construct_nv_segment_path(wal, segment->nv_segment_index_, nv_path);
+
+  segment->nv_fd_ = nvwal_open_best_effort_o_direct(nv_path, O_RDWR, 0);
+
+  if (segment->nv_fd_ == -1) {
+    /** Failed to open the file! */
+    assert(errno);
+    return errno;
+  }
+
+  assert(segment->nv_fd_);  /** open never returns 0 */
+
+  struct stat st;
+  if (fstat(segment->nv_fd_, &st)) {
+    assert(errno);
+    return errno;
+  } else if (st.st_size != wal->config_.segment_size_) {
+    return nvwal_raise_einval_cstr(
+      "Error: The existing NV-resident segment %s has an incompatible size\n",
+      nv_path);
+  }
+
+  /* we don't memset in this case. instead, MAP_POPULATE to pre-fault pages */
+  segment->nv_baseaddr_ = mmap(0,
+                  wal->config_.segment_size_,
+                  PROT_READ | PROT_WRITE,
+                  MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE,
+                  segment->nv_fd_,
+                  0);
+
+  if (segment->nv_baseaddr_ == MAP_FAILED) {
+    assert(errno);
+    return errno;
+  }
+  assert(segment->nv_baseaddr_);
+
+  return 0;
+}
+
 
 /**************************************************************************
  *

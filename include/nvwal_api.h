@@ -54,7 +54,7 @@ uint64_t nvwal_get_version();
  * @code{.c}
  * struct NvwalConfig my_config;
  * ... Put configuration values onto my_config
- * struct NvwalContext my_wal;
+ * struct NvwalContext my_wal;  // for ease of read. we recommend this to be on heap
  * if (nvwal_init(&my_config, &my_wal)) {
  *    ... some error happened! check errno
  * }

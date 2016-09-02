@@ -161,9 +161,20 @@
  */
 typedef uint64_t  nvwal_epoch_t;
 
-/** DESCRIBE ME */
+/**
+ * Error code used throughout libnvwal.
+ * The value is compatible to linux's error code defined in errno.h.
+ *
+ * We also set the errno global variable in most cases.
+ */
 typedef int32_t   nvwal_error_t;
-/** DESCRIBE ME */
+/**
+ * Represents a byte (8-bits) of user-given data.
+ * Equivalent to char in most environments, but you'd be surprised
+ * it is not in some environment.
+ * We use this typedef-ed name rather than int8_t to clarify
+ * the data is a user-given data (eg logs) we are managing.
+ */
 typedef int8_t    nvwal_byte_t;
 
 /** Metadata store page number */
@@ -411,7 +422,16 @@ struct NvwalConfig {
  * The size of this struct must be exactly 64 bytes.
  */
 struct NvwalControlBlockFsyncerProgress {
-  char cacheline_pad_[56];
+  /**
+   * The largest DSID of segment we durably copied from NV to Disk.
+   * Starts with 0, and fsyncer bumps it up one by one when
+   * it copies a segment to disk.
+   */
+  nvwal_dsid_t last_synced_dsid_;
+
+  char cacheline_pad_[64
+  - sizeof(nvwal_dsid_t)  /* last_synced_dsid_ */
+  ];
 };
 
 /**
@@ -421,7 +441,18 @@ struct NvwalControlBlockFsyncerProgress {
  * The size of this struct must be exactly 64 bytes.
  */
 struct NvwalControlBlockFlusherProgress {
-  char cacheline_pad_[56];
+  /**
+   * DE fo this WAL instance.
+   * This is the ground truth of DE in case of crash/shutdown.
+   * We complete bumping up DE exactly at the time we durably bump up this variable.
+   * If the increment didn't reach NV, it didn't happen.
+   * Thus, we bump this up at the end of epoch-persistence procedure.
+   */
+  nvwal_epoch_t durable_epoch_;
+
+  char cacheline_pad_[64
+  - sizeof(nvwal_epoch_t)  /* durable_epoch_ */
+  ];
 };
 
 /**
@@ -579,6 +610,13 @@ struct NvwalLogSegment {
    * This is bumped up without race when the segment object is recycled for next use.
    */
   nvwal_dsid_t dsid_;
+
+  /**
+   * Index of this segment in NVDIMM.
+   * This is immutable once initialized.
+   * @invariant this == parent_->segments_ + nv_segment_index_
+   */
+  uint32_t nv_segment_index_;
 
   /**
    * When this segment is populated and ready for copying to disk,

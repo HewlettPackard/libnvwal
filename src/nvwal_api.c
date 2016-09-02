@@ -516,9 +516,8 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
   total_writen = 0;
   written = 0;
   segment->fsync_error_ = 0;
-  nvwal_concat_sequence_filename(
-    segment->parent_->config_.disk_root_,
-    "nvwal_ds",
+  nvwal_construct_disk_segment_path(
+    segment->parent_,
     segment->dsid_,
     disk_path);
 
