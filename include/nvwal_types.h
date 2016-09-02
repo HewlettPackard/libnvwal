@@ -324,6 +324,16 @@ enum NvwalConstants {
  */
 struct NvwalConfig {
   /**
+   * An automatically populated version number of this libnvwal binary.
+   * This value is not given by the user. Even if you set some number,
+   * we will ignore it. This value is populated during initialization
+   * and persisted in CF. When we find a different version in CF
+   * during restart, we so far throw an error, but we might later
+   * implement some auto-conversion for a minor version difference.
+   */
+  uint64_t libnvwal_version_;
+
+  /**
    * Null-terminated string of folder to NVDIMM storage, under which
    * this WAL instance will write out log files at first.
    * If this string is not null-terminated, nvwal_init() will return an error.
@@ -389,6 +399,58 @@ struct NvwalConfig {
    * If this is 0 (not set), we automatically set kNvwalMdsPageSize.
    */
   uint64_t mds_page_size_;
+};
+
+/**
+ * Piece of NvwalControlBlock that is updated solely by
+ * fsyncer. No one else will touch the cacheline to
+ * cause racy file-write.
+ * The size of this struct must be exactly 64 bytes.
+ */
+struct NvwalControlBlockFsyncerProgress {
+  char cacheline_pad_[56];
+};
+
+/**
+ * Piece of NvwalControlBlock that is updated solely by
+ * flusher. No one else will touch the cacheline to
+ * cause racy file-write.
+ * The size of this struct must be exactly 64 bytes.
+ */
+struct NvwalControlBlockFlusherProgress {
+  char cacheline_pad_[56];
+};
+
+/**
+ * @brief Contents of the Control File (CF)
+ * @details
+ * Each WAL instance has a small file called Control File (CF)
+ * in the NV folder, with the name "nvwal.cf".
+ * It contains:
+ * \li Configuration as of starting the instance. This is immutable once started.
+ * \li Tiny set of progress information. This is mutable and frequntly/durably written.
+ */
+struct NvwalControlBlock {
+
+  /** Mutable, tiny progress information about flusher. One cacheline */
+  struct NvwalControlBlockFlusherProgress flusher_progress_;
+  /** Mutable, tiny progress information about fsyncer. One cacheline */
+  struct NvwalControlBlockFsyncerProgress fsyncer_progress_;
+
+  /** Configuration as of starting */
+  struct NvwalConfig config_;
+
+  /**
+   * Makes the size of whole CF a mupliply of 512.
+   * This makes it easier to use O_DIRECT.
+   */
+  char pad_[512 - (
+    (
+      sizeof(struct NvwalControlBlockFlusherProgress)
+      + sizeof(struct NvwalControlBlockFsyncerProgress)
+      + sizeof(struct NvwalConfig)
+    )
+    % 512)];
 };
 
 /**
@@ -681,10 +743,30 @@ struct NvwalContext {
   struct NvwalConfig config_;
 
   /**
+   * An auxiliary object used while restart only.
+   * This holds the value of the entire config when the existing WAL instance
+   * in the specified NV folder used and persisted to the Control File.
+   * During restart, we grab the values first, then compare them with
+   * config_ (the value given this time) to do appropriate checks/adjustments.
+   * When this is a fresh-new execution, prev_config_.libnvwal_version_ is 0.
+   */
+  struct NvwalConfig prev_config_;
+
+  /**
    * Maintains state of each log segment in this WAL instance.
    * Only up to log_segments_[segment_count_ - 1] are used.
    */
   struct NvwalLogSegment segments_[kNvwalMaxActiveSegments];
+
+  /**
+   * mmap-ed control block image on the control file in NV.
+   */
+  struct NvwalControlBlock* nv_control_block_;
+
+  /**
+   * File descriptor of the control file in NV.
+   */
+  int64_t nv_control_file_fd_;
 
   /**
    * Number of segments this WAL instance uses.

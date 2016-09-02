@@ -29,6 +29,7 @@
 
 #include "nvwal_atomics.h"
 #include "nvwal_api.h"
+#include "nvwal_mds.h"
 #include "nvwal_util.h"
 
 /**************************************************************************
@@ -150,6 +151,8 @@ void remove_trailing_slash(char* path, uint16_t* len) {
 nvwal_error_t sanity_check_config(
   struct NvwalConfig* config,
   enum NvwalInitMode mode) {
+  config->libnvwal_version_ = nvwal_get_version();
+
   /** Check/adjust nv_root/disk_root */
   config->nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
   config->disk_root_len_ = strnlen(config->disk_root_, kNvwalMaxPathLength);
@@ -271,19 +274,74 @@ nvwal_error_t sanity_check_config(
   return 0;
 }
 
-nvwal_error_t nvwal_impl_init(
-  const struct NvwalConfig* given_config,
+nvwal_error_t open_control_file(
   enum NvwalInitMode mode,
   struct NvwalContext* wal) {
-  /** otherwise the following memzero will also reset config, ouch */
-  struct NvwalConfig* config = &(wal->config_);
-  if (config == given_config) {
-    return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
+  assert(wal->nv_control_file_fd_ == 0 || wal->nv_control_file_fd_ == -1);
+  assert(!wal->nv_control_block_ || wal->nv_control_block_ == MAP_FAILED);
+  /**
+   * Whether restart or create, we try to load the control file first.
+   */
+  char cf_path[kNvwalMaxPathLength];
+  assert(wal->config_.nv_root_len_ + 1U + 8U < kNvwalMaxPathLength);
+  memcpy(cf_path, wal->config_.nv_root_, wal->config_.nv_root_len_);
+  cf_path[wal->config_.nv_root_len_] = '/';
+  memcpy(cf_path + wal->config_.nv_root_len_ + 1U, "nvwal.cf", 8);
+  cf_path[wal->config_.nv_root_len_ + 1U + 8U] = '\0';
+
+  uint64_t original_filesize = 0;
+  {
+    struct stat st;
+    if (stat(cf_path, &st) == 0) {
+      original_filesize = st.st_size;
+    }
   }
 
-  memset(wal, 0, sizeof(*wal));
-  memcpy(config, given_config, sizeof(*config));
+  if (original_filesize && original_filesize != sizeof(struct NvwalControlBlock)) {
+    return nvwal_raise_einval_cstr(
+    "Error: File size of the control file '%s' is not compatible\n",
+    cf_path);
+  }
 
+  wal->nv_control_file_fd_ = nvwal_open_best_effort_o_direct(
+    cf_path,
+    (mode == kNvwalInitRestart ? 0 : O_CREAT) | O_RDWR,
+    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+
+
+  if (wal->nv_control_file_fd_ == -1) {
+    return nvwal_raise_einval_cstr(
+      "Error: We could not open the control file '%s'\n",
+      cf_path);
+  }
+
+  wal->nv_control_block_ = (struct NvwalControlBlock*) mmap(
+    0,
+    sizeof(struct NvwalControlBlock),
+    PROT_READ | PROT_WRITE,
+    MAP_ANONYMOUS | MAP_PRIVATE,
+    wal->nv_control_file_fd_,
+    0);
+
+  if (wal->nv_control_block_ == MAP_FAILED) {
+    return errno;
+  }
+
+  if (original_filesize != sizeof(struct NvwalControlBlock)) {
+    memset(wal->nv_control_block_, 0, sizeof(struct NvwalControlBlock));
+    msync(wal->nv_control_block_, sizeof(struct NvwalControlBlock), MS_SYNC);
+  }
+
+  /** Take the image of previous config as of this point. */
+  memcpy(&wal->prev_config_, &wal->nv_control_block_->config_, sizeof(struct NvwalConfig));
+
+  return 0;
+}
+
+nvwal_error_t impl_init_no_error_handling(
+  enum NvwalInitMode mode,
+  struct NvwalContext* wal) {
+  struct NvwalConfig* config = &(wal->config_);
   NVWAL_CHECK_ERROR(sanity_check_config(config, mode));
 
   /** CreateTruncate is same as Create except it nukes everything first. */
@@ -291,6 +349,8 @@ nvwal_error_t nvwal_impl_init(
     NVWAL_CHECK_ERROR(nvwal_remove_all_under(config->nv_root_));
     NVWAL_CHECK_ERROR(nvwal_remove_all_under(config->disk_root_));
   }
+
+  NVWAL_CHECK_ERROR(open_control_file(mode, wal));
 
   wal->segment_count_ = config->nv_quota_ / config->segment_size_;
   if (config->resuming_epoch_ == kNvwalInvalidEpoch) {
@@ -316,27 +376,15 @@ nvwal_error_t nvwal_impl_init(
   /** TODO we must retrieve this from MDS in restart case */
   wal->largest_dsid_ = 0;
 
-  /**
-   * From now on, error-return might have to release a few things.
-   * Invoke nvwal_uninit on error-return.
-   */
-  nvwal_error_t ret = 0;
-
   /* Initialize Metadata Store */
-  /* riet = mds_init(&wal->config_, wal); */
+  /* NVWAL_CHECK_ERROR(mds_init(&wal->config_, wal)); */
 
   /* Initialize the reader context */
   /* ret = reader_init(&wal->reader_); */
-  if (ret) {
-    goto error_return;
-  }
 
   /* Initialize all nv segments */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
-    ret = init_fresh_nvram_segment(wal, wal->segments_ + i);
-    if (ret) {
-      goto error_return;
-    }
+    NVWAL_CHECK_ERROR(init_fresh_nvram_segment(wal, wal->segments_ + i));
   }
 
   /*
@@ -344,27 +392,41 @@ nvwal_error_t nvwal_impl_init(
    * This is more efficient than individual, lots of fsync.
    * We thus don't invoke fsync() in each init_fresh_nvram_segment.
    */
-  ret = nvwal_open_and_syncfs(config->nv_root_);
-  if (ret) {
-    goto error_return;
-  }
-  ret = nvwal_open_and_syncfs(config->disk_root_);
-  if (ret) {
-    goto error_return;
-  }
+  NVWAL_CHECK_ERROR(nvwal_open_and_syncfs(config->nv_root_));
+  NVWAL_CHECK_ERROR(nvwal_open_and_syncfs(config->disk_root_));
 
   /** Now we can start accepting flusher/fsyncher */
   nvwal_impl_thread_state_get_ready(&wal->flusher_thread_state_);
   nvwal_impl_thread_state_get_ready(&wal->fsyncer_thread_state_);
 
   return 0;
+}
 
-error_return:
-  assert(ret);
-  nvwal_impl_uninit(wal);
-  /** Error code of uninit is ignored. Our own ret is probably more informative */
-  errno = ret;
-  return ret;
+nvwal_error_t nvwal_impl_init(
+  const struct NvwalConfig* given_config,
+  enum NvwalInitMode mode,
+  struct NvwalContext* wal) {
+  /** otherwise the following memzero will also reset config, ouch */
+  struct NvwalConfig* config = &(wal->config_);
+  if (config == given_config) {
+    return nvwal_raise_einval("Error: misuse, the WAL instance's own config object given\n");
+  }
+
+  memset(wal, 0, sizeof(*wal));
+  memcpy(config, given_config, sizeof(*config));
+
+  /** Most code were moved to the following function. we just do error handling here */
+  nvwal_error_t ret = impl_init_no_error_handling(mode, wal);
+
+  if (ret) {
+    nvwal_impl_uninit(wal);
+
+    /** Error code of uninit is ignored. Our own ret is probably more informative */
+    errno = ret;
+    return ret;
+  } else {
+    return 0;
+  }
 }
 
 nvwal_error_t init_fresh_nvram_segment(
@@ -457,6 +519,10 @@ nvwal_error_t nvwal_impl_uninit(
   /** uninit continues as much as possible even after an error. */
   nvwal_error_t last_seen_error = 0;
 
+  /*last_seen_error = nvwal_stock_error_code(
+    last_seen_error,
+    mds_uninit(wal));*/
+
   for (int i = 0; i < wal->segment_count_; ++i) {
     last_seen_error = nvwal_stock_error_code(
       last_seen_error,
@@ -465,6 +531,15 @@ nvwal_error_t nvwal_impl_uninit(
 
   /* Uninitialize reader */
   /* last_seen_error = nvwal_stock_error_code(last_seen_error, reader_uninit(&wal->reader_)); */
+
+  if (wal->nv_control_block_ && wal->nv_control_block_ != MAP_FAILED) {
+    munmap(wal->nv_control_block_, sizeof(struct NvwalControlBlock));
+    wal->nv_control_block_ = 0;
+  }
+  if (wal->nv_control_file_fd_ && wal->nv_control_file_fd_ != -1) {
+    close(wal->nv_control_file_fd_);
+    wal->nv_control_file_fd_ = 0;
+  }
   return last_seen_error;
 }
 

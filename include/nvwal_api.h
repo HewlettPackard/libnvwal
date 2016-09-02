@@ -34,6 +34,13 @@ extern "C" {
 #endif  /* __cplusplus */
 
 /**
+ * @returns the version of this libnvwal binary.
+ * Whenever we [might] break compatibility of file formarts etc,
+ * we bump this up.
+ */
+uint64_t nvwal_get_version();
+
+/**
  * @brief Initializes a WAL instance.
  * @param[in] config the configurations for this WAL instance.
  * This object must \b NOT be pointing to wal->config.
