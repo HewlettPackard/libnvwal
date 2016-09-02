@@ -338,6 +338,57 @@ nvwal_error_t open_control_file(
   return 0;
 }
 
+/**
+ * Checks whether there is any discrepency between the given configuration
+ * and previous configuration. We so far reject almost all discrepencies,
+ * refusing to start up. Later, we might implement automatic conversion
+ * to tolerate some difference.
+ */
+nvwal_error_t check_adjust_on_prev_config(
+  struct NvwalContext* wal) {
+  if (wal->prev_config_.libnvwal_version_ == 0) {
+    /* Meaning this is a fresh start.  */
+    return 0;
+  } else if (wal->prev_config_.libnvwal_version_ != nvwal_get_version()) {
+    return nvwal_raise_einval_llu(
+      "Error: The existing libnvwal installation has a version number %llu, different from"
+      " this binary's.\n",
+      wal->prev_config_.libnvwal_version_);
+  } else if (wal->prev_config_.mds_page_size_ != wal->config_.mds_page_size_) {
+    return nvwal_raise_einval_llu(
+      "Error: The existing libnvwal installation has mds_page_size %llu, different from"
+      " the given configuration.\n",
+      wal->prev_config_.mds_page_size_);
+  } else if (wal->prev_config_.nv_quota_ != wal->config_.nv_quota_) {
+    /*
+     * Note : So far this requirement on nv_quota_/segment_size_ is essential.
+     * By keeping the same segment_count, we can easily know which existing
+     * NVDIMM-resident segment file corresponds to which segment-ID (just mod).
+     */
+    return nvwal_raise_einval_llu(
+      "Error: The existing libnvwal installation has nv_quota_ %llu, different from"
+      " the given configuration.\n",
+      wal->prev_config_.nv_quota_);
+  } else if (wal->prev_config_.segment_size_ != wal->config_.segment_size_) {
+    return nvwal_raise_einval_llu(
+      "Error: The existing libnvwal installation has segment_size_ %llu, different from"
+      " the given configuration.\n",
+      wal->prev_config_.segment_size_);
+  } else if (wal->prev_config_.writer_buffer_size_ != wal->config_.writer_buffer_size_) {
+    return nvwal_raise_einval_llu(
+      "Error: The existing libnvwal installation has writer_buffer_size_ %llu, different from"
+      " the given configuration.\n",
+      wal->prev_config_.writer_buffer_size_);
+  } else if (wal->prev_config_.writer_count_ != wal->config_.writer_count_) {
+    return nvwal_raise_einval_llu(
+      "Error: The existing libnvwal installation has writer_count_ %llu, different from"
+      " the given configuration.\n",
+      wal->prev_config_.writer_count_);
+  }
+
+  return 0;
+}
+
 nvwal_error_t impl_init_no_error_handling(
   enum NvwalInitMode mode,
   struct NvwalContext* wal) {
@@ -351,6 +402,7 @@ nvwal_error_t impl_init_no_error_handling(
   }
 
   NVWAL_CHECK_ERROR(open_control_file(mode, wal));
+  NVWAL_CHECK_ERROR(check_adjust_on_prev_config(wal));
 
   wal->segment_count_ = config->nv_quota_ / config->segment_size_;
   if (config->resuming_epoch_ == kNvwalInvalidEpoch) {
