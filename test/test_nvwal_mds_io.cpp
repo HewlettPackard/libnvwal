@@ -46,8 +46,8 @@ TEST(NvwalMdsIoTest, AppendPage)
 
   NvwalContext* wal = context.get_wal(0);
   struct PageFile* file = mds_io_file(&wal->mds_.io_, 0);
-  void* pagebuf = malloc(wal->mds_.io_.config_.mds_page_size_);
-  memset(pagebuf, 0, wal->mds_.io_.config_.mds_page_size_);
+  void* pagebuf = malloc(wal->config_.mds_page_size_);
+  memset(pagebuf, 0, wal->config_.mds_page_size_);
   ASSERT_NE((void*) NULL, pagebuf);
   mds_io_append_page(file, pagebuf);
 
@@ -57,7 +57,7 @@ TEST(NvwalMdsIoTest, AppendPage)
   EXPECT_EQ(0, context.uninit_io(false));
 
   /* test recovery code path */
-  EXPECT_EQ(0, context.init_io(root_path, false));
+  EXPECT_EQ(0, context.init_io(root_path, kNvwalInitRestart));
   EXPECT_EQ(0, context.uninit_io());
 }
 

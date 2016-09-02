@@ -166,6 +166,9 @@ typedef int32_t   nvwal_error_t;
 /** DESCRIBE ME */
 typedef int8_t    nvwal_byte_t;
 
+/** Metadata store page number */
+typedef uint64_t mds_page_no_t;
+
 /**
  * @brief Unique identifier for a \b Durable (or disk-resident) \b Segment.
  * @details
@@ -555,8 +558,8 @@ struct NvwalLogSegment {
  * @brief Represents a context of a meta-data-store I/O subsystem instance.
  */
 struct NvwalMdsIoContext {
-  /** Runtime configuration parameters */
-  struct NvwalConfig config_;
+  /** Nvwal context containing this context */
+  struct NvwalContext* wal_;
 
   /** Active (open) page files */
   struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
@@ -566,22 +569,31 @@ struct NvwalMdsIoContext {
 };
 
 /**
+ * @brief Represents a volatile descriptor of a buffer frame mapped on NVRAM. 
+ */
+struct NvwalMdsBuffer {
+  struct PageFile* file_;
+  mds_page_no_t page_no_;
+  void* baseaddr_;
+};
+
+/**
  * @brief Represents a context of a meta-data-store buffer-manager instance.
  */
 struct NvwalMdsBufferManagerContext {
-  /** Runtime configuration parameters */
-  struct NvwalConfig config_;
+  /** Nvwal context containing this context */
+  struct NvwalContext* wal_;
 
   /** Buffers */
-  struct NvwalMdsBuffer* write_buffers_[kNvwalMdsMaxActivePagefiles];
+  struct NvwalMdsBuffer write_buffers_[kNvwalMdsMaxActivePagefiles];
 };
 
 /**
  * @brief Represents a context of a meta-data store instance.
  */
 struct NvwalMdsContext {
-  /** Runtime configuration parameters */
-  struct NvwalConfig config_;
+  /** Nvwal context containing this context */
+  struct NvwalContext* wal_;
 
   /** IO subsystem context */
   struct NvwalMdsIoContext io_;

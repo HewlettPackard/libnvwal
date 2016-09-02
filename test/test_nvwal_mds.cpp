@@ -71,9 +71,8 @@ void write_multiple_epoch_batches(
       /* shutdown, restart, and recover */
       std::string root_path = context.get_root_path();
       EXPECT_EQ(0, context.uninit_all(false));
-      EXPECT_EQ(0, context.init_all(root_path, false));
+      EXPECT_EQ(0, context.init_all(root_path, kNvwalInitRestart));
       wal = context.get_wal(0);
-      EXPECT_EQ(0, mds_recover(wal));
       EXPECT_EQ(high, mds_latest_epoch(wal));
     }
   }

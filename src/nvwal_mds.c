@@ -36,7 +36,7 @@
 #include "nvwal_types.h"
 #include "nvwal_util.h"
 
-/* black swan tchaikovsky */
+/* Inspired by Black Swan of Tchaikovsky */
 
 /* 
  * The type is defined in nvwal_mds_types.h but we do the assert check 
@@ -92,9 +92,26 @@ static struct PageFile* alloc_page_file_desc(
   return file;
 }
 
-/*
- * FIXME: Use direct i/o
- */
+
+static nvwal_error_t mds_io_file_exists(
+  struct NvwalMdsIoContext* io, 
+  file_no_t file_no)
+{
+  char pathname[kNvwalMaxPathLength];
+  struct stat stbuf;
+  
+  nvwal_concat_sequence_filename(
+    io->wal_->config_.disk_root_,
+    MDS_PAGE_FILE_PREFIX,
+    file_no,
+    pathname);
+    
+  nvwal_error_t ret = stat(pathname, &stbuf);
+
+  return ret == 0;
+}
+
+
 nvwal_error_t mds_io_open_file(
   struct NvwalMdsIoContext* io, 
   file_no_t file_no,
@@ -105,7 +122,7 @@ nvwal_error_t mds_io_open_file(
   char pathname[kNvwalMaxPathLength];
   
   nvwal_concat_sequence_filename(
-    io->config_.disk_root_,
+    io->wal_->config_.disk_root_,
     MDS_PAGE_FILE_PREFIX,
     file_no,
     pathname);
@@ -129,9 +146,6 @@ error_return:
 }
 
 
-/*
- * FIXME: Use direct i/o
- */
 nvwal_error_t mds_io_create_file(
   struct NvwalMdsIoContext* io, 
   file_no_t file_no, 
@@ -142,7 +156,7 @@ nvwal_error_t mds_io_create_file(
   char pathname[kNvwalMaxPathLength];
 
   nvwal_concat_sequence_filename(
-    io->config_.disk_root_,
+    io->wal_->config_.disk_root_,
     MDS_PAGE_FILE_PREFIX,
     file_no,
     pathname);
@@ -160,7 +174,7 @@ nvwal_error_t mds_io_create_file(
   /* 
    * Sync the parent directory, so that the newly created (empty) file is visible.
    */
-  ret = nvwal_open_and_fsync(io->config_.disk_root_);
+  ret = nvwal_open_and_fsync(io->wal_->config_.disk_root_);
   if (ret) {
     goto error_return;
   }
@@ -229,7 +243,7 @@ nvwal_error_t mds_io_append_page(
   const void* buf)
 {
   nvwal_error_t ret;
-  size_t page_size = file->io_->config_.mds_page_size_;
+  size_t page_size = file->io_->wal_->config_.mds_page_size_;
 
   /* we might need multiple writes */
   size_t total_written = 0;
@@ -268,7 +282,7 @@ static nvwal_error_t mds_io_recovery_complete_append_page(struct PageFile* file)
    * If not multiple of page size, then we had a torn append due to a crash so
    * we truncate the last torned page.
    */
-  size_t page_size = file->io_->config_.mds_page_size_;
+  size_t page_size = file->io_->wal_->config_.mds_page_size_;
   if (buf.st_size % page_size) {
     size_t complete_pages = buf.st_size / page_size;
     ret = ftruncate(file->fd_, complete_pages * page_size);
@@ -287,47 +301,78 @@ error_return:
 
 
 nvwal_error_t mds_io_init(
-  const struct NvwalConfig* config, 
-  struct NvwalMdsIoContext* io)
+  enum NvwalInitMode mode,
+  struct NvwalContext* wal,
+  int* did_restart)
 {
-  int i;
   nvwal_error_t ret;
   struct PageFile* pf;
 
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsIoContext* io = &(mds->io_);
+ 
   memset(io, 0, sizeof(*io));
-  memcpy(&io->config_, config, sizeof(*config));
 
-  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    ret = mds_io_open_file(io, i, &pf);
-    if (ret == ENOENT) {
-      /* page file does not exist, create it */
-      ret = mds_io_create_file(io, i, &pf);
+  io->wal_ = wal;
+
+  *did_restart = 0;
+
+  /* Check if there are any existing files */  
+  int num_existing = 0;
+  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    int exists = mds_io_file_exists(io, i);
+    num_existing += exists;
+  }
+
+  /* Attempt to restart from existing files */
+  if ((mode == kNvwalInitRestart && 
+       num_existing == kNvwalMdsMaxActivePagefiles) || 
+      (mode == kNvwalInitCreateIfNotExists && 
+       num_existing == kNvwalMdsMaxActivePagefiles))
+  {
+    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+      ret = mds_io_open_file(io, i, &pf);
       if (ret != 0) {
         goto error_return;
       }
-    } else {
-      /* file exists, complete the last append */
+      io->active_files_[i] = pf;
       ret = mds_io_recovery_complete_append_page(pf);
       if (ret != 0) {
         goto error_return;
       }
     }
-    io->active_files_[i] = pf;
+    *did_restart = 1;
+    return 0;  
   }
 
-  return 0;
+  /* No existing files, attempt to create them */  
+  if (mode == kNvwalInitCreateIfNotExists && 
+      num_existing == 0)
+  {
+    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+      ret = mds_io_create_file(io, i, &pf);
+      if (ret != 0) {
+        goto error_return;
+      }
+      io->active_files_[i] = pf;
+    }
+    return 0;  
+  }
 
+  ret = EIO;
+  
 error_return:
   errno = ret;
   return ret;
 }
 
 
-nvwal_error_t mds_io_uninit(struct NvwalMdsIoContext* io)
+nvwal_error_t mds_io_uninit(struct NvwalContext* wal)
 {
-  int i;
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsIoContext* io = &(mds->io_);
 
-  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
     if (io->active_files_[i]) {
       mds_io_close_file(io, io->active_files_[i]);   
       io->active_files_[i] = NULL;
@@ -350,7 +395,7 @@ static nvwal_error_t create_nvram_buffer_file(
   char pathname[256];
 
   nvwal_concat_sequence_filename(
-    bufmgr->config_.nv_root_,
+    bufmgr->wal_->config_.nv_root_,
     MDS_NVRAM_BUFFER_FILE_PREFIX,
     buffer_id,
     pathname);
@@ -366,7 +411,7 @@ static nvwal_error_t create_nvram_buffer_file(
   }
 
   /** posix_fallocate doesn't set errno, do it ourselves */
-  ret = posix_fallocate(nv_fd, 0, bufmgr->config_.mds_page_size_);
+  ret = posix_fallocate(nv_fd, 0, bufmgr->wal_->config_.mds_page_size_);
   if (ret) {
     goto error_return;
   }
@@ -377,7 +422,7 @@ static nvwal_error_t create_nvram_buffer_file(
   /* 
    * Sync the parent directory, so that the newly created (empty) file is visible.
    */
-  ret = nvwal_open_and_fsync(bufmgr->config_.nv_root_);
+  ret = nvwal_open_and_fsync(bufmgr->wal_->config_.nv_root_);
   if (ret) {
     goto error_return;
   }
@@ -389,6 +434,23 @@ error_return:
   return ret;
 }
 
+static int nvram_buffer_file_exists(
+  struct NvwalMdsBufferManagerContext* bufmgr,
+  int buffer_id)
+{
+  char pathname[kNvwalMaxPathLength];
+  struct stat stbuf;
+
+  nvwal_concat_sequence_filename(
+    bufmgr->wal_->config_.nv_root_,
+    MDS_NVRAM_BUFFER_FILE_PREFIX,
+    buffer_id,
+    pathname);
+    
+  nvwal_error_t ret = stat(pathname, &stbuf);
+  return (ret == 0);
+}
+
 
 static nvwal_error_t map_nvram_buffer_file(
   struct NvwalMdsBufferManagerContext* bufmgr,
@@ -397,10 +459,10 @@ static nvwal_error_t map_nvram_buffer_file(
 {
   nvwal_error_t ret;
   int nv_fd;
-  char pathname[256];
+  char pathname[kNvwalMaxPathLength];
 
   nvwal_concat_sequence_filename(
-    bufmgr->config_.nv_root_,
+    bufmgr->wal_->config_.nv_root_,
     MDS_NVRAM_BUFFER_FILE_PREFIX,
     buffer_id,
     pathname);
@@ -417,7 +479,7 @@ static nvwal_error_t map_nvram_buffer_file(
    * Don't bother with (non-transparent) huge pages. Even libpmem doesn't try it.
    */
   *nv_baseaddr = mmap(0,
-                  bufmgr->config_.mds_page_size_,
+                  bufmgr->wal_->config_.mds_page_size_,
                   PROT_READ | PROT_WRITE,
                   MAP_SHARED,
                   nv_fd,
@@ -441,13 +503,13 @@ error_return:
   return ret;
 }
 
-nvwal_error_t unmap_nvram_buffer_file(
+static nvwal_error_t unmap_nvram_buffer_file(
   struct NvwalMdsBufferManagerContext* bufmgr,
   void* nv_baseaddr)
 {
   nvwal_error_t ret;
 
-  ret = munmap(nv_baseaddr, bufmgr->config_.mds_page_size_);
+  ret = munmap(nv_baseaddr, bufmgr->wal_->config_.mds_page_size_);
   if (ret != 0) {
     ret = errno;
     goto error_return;   
@@ -459,39 +521,23 @@ error_return:
   return ret;
 }
 
-static nvwal_error_t mds_bufmgr_init_nvram_buffer(
+
+static nvwal_error_t mds_bufmgr_map_nvram_buffer(
   struct NvwalMdsBufferManagerContext* bufmgr,
-  int buffer_id, 
-  struct NvwalMdsBuffer** buffer)
+  int buffer_id) 
 {
   nvwal_error_t ret;
   void* baseaddr;
 
-  /* Attempt to map a buffer file and if it doesn't exist create 
-   * it and map it */
   ret = map_nvram_buffer_file(bufmgr, buffer_id, &baseaddr);
-  if (ret == ENOENT) {
-    ret = create_nvram_buffer_file(bufmgr, buffer_id);
-    if (ret != 0) {
-      goto error_return;
-    }
-    ret = map_nvram_buffer_file(bufmgr, buffer_id, &baseaddr);
-  } 
   if (ret != 0) {
     goto error_return;
   }
 
-  /* create buffer descriptor */
-  *buffer = malloc(sizeof(**buffer));
-  if (*buffer == NULL) {
-    ret = ENOMEM;
-    ret = unmap_nvram_buffer_file(bufmgr, baseaddr);
-    goto error_return;
-  }
-  
-  (*buffer)->file_ = NULL;
-  (*buffer)->page_no_ = 0;
-  (*buffer)->baseaddr_ = baseaddr;
+  struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[buffer_id];
+  buffer->file_ = NULL;
+  buffer->page_no_ = 0;
+  buffer->baseaddr_ = baseaddr;
 
   return 0;
 
@@ -501,24 +547,27 @@ error_return:
 }
 
 
-/**
- * @details 
- * We maintain a single nvram buffer per page file.
- */
-static nvwal_error_t mds_bufmgr_init_nvram_buffers(
-  struct NvwalMdsBufferManagerContext* bufmgr)
+static nvwal_error_t mds_bufmgr_create_nvram_buffer(
+  struct NvwalMdsBufferManagerContext* bufmgr,
+  int buffer_id)
 {
   nvwal_error_t ret;
-  int i;
-  struct NvwalMdsBuffer* buffer;
+  void* baseaddr;
 
-  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    ret = mds_bufmgr_init_nvram_buffer(bufmgr, i, &buffer);
-    if (ret != 0) {
-      goto error_return;
-    }
-    bufmgr->write_buffers_[i] = buffer;
+  ret = create_nvram_buffer_file(bufmgr, buffer_id);
+  if (ret != 0) {
+    goto error_return;
   }
+  ret = map_nvram_buffer_file(bufmgr, buffer_id, &baseaddr);
+  if (ret != 0) {
+    goto error_return;
+  }
+
+  struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[buffer_id];
+  buffer->file_ = NULL;
+  buffer->page_no_ = 0;
+  buffer->baseaddr_ = baseaddr;
+
   return 0;
 
 error_return:
@@ -528,37 +577,80 @@ error_return:
 
 
 nvwal_error_t mds_bufmgr_init(
-  const struct NvwalConfig* config, 
-  struct NvwalMdsBufferManagerContext* bufmgr)
+  enum NvwalInitMode mode,
+  struct NvwalContext* wal,
+  int* did_restart)
 {
   nvwal_error_t ret;
 
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
+ 
   memset(bufmgr, 0, sizeof(*bufmgr));
-  memcpy(&bufmgr->config_, config, sizeof(*config));
 
-  ret = mds_bufmgr_init_nvram_buffers(bufmgr);
+  bufmgr->wal_ = wal;
 
+  *did_restart = 0;
+
+  /* Check if there are any existing buffers */  
+  int num_existing = 0;
+  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    int exists = nvram_buffer_file_exists(bufmgr, i);
+    num_existing += exists;
+  }
+
+  /* Attempt to restart from existing buffers */
+  if ((mode == kNvwalInitRestart && 
+       num_existing == kNvwalMdsMaxActivePagefiles) ||
+      (mode == kNvwalInitCreateIfNotExists && 
+       num_existing == kNvwalMdsMaxActivePagefiles))
+  {
+    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+      ret = mds_bufmgr_map_nvram_buffer(bufmgr, i);
+      if (ret != 0) {
+        goto error_return;
+      }
+    }
+    *did_restart = 1;
+    return 0;  
+  }
+
+  /* No existing buffers, attempt to create them */  
+  if (mode == kNvwalInitCreateIfNotExists && 
+      num_existing == 0)
+  {
+    for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+      ret = mds_bufmgr_create_nvram_buffer(bufmgr, i);
+      if (ret != 0) {
+        goto error_return;
+      }
+    }
+    return 0;  
+  }
+
+  ret = EIO;
+  
+error_return:
+  errno = ret;
   return ret;
 }
 
 
 nvwal_error_t mds_bufmgr_uninit(
-  struct NvwalMdsBufferManagerContext* bufmgr)
+  struct NvwalContext* wal)
 {
   nvwal_error_t ret;
-  int i;
   struct NvwalMdsBuffer* buffer;
-
-  for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    buffer = bufmgr->write_buffers_[i];
-    if (buffer) {
-      ret = unmap_nvram_buffer_file(bufmgr, buffer->baseaddr_);
-        if (ret != 0) {
-          goto error_return;
-      }
-      free(buffer);
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
+ 
+  for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
+    buffer = &bufmgr->write_buffers_[i];
+    ret = unmap_nvram_buffer_file(bufmgr, buffer->baseaddr_);
+    if (ret != 0) {
+      goto error_return;
     }
-    bufmgr->write_buffers_[i] = NULL;
+    buffer->baseaddr_ = NULL;
   }
   return 0;
 
@@ -585,7 +677,7 @@ static inline struct Page* mds_bufmgr_page(struct NvwalMdsBuffer* buffer)
  *
  * Linearization point with respect to readers: 
  * It's possible that while a concurrent reader finds and tries to read an 
- * epoch from a page buffered in durable nvram buffer, we evict and recycle 
+ * epoch from a page buffered in a durable nvram buffer, we evict and recycle 
  * the buffered page.
  * To help readers detect this case, after we evict a page and before we 
  * recycle the buffer, we assign the page number of the buffer page based to 
@@ -606,7 +698,7 @@ nvwal_error_t mds_bufmgr_alloc_page(
   struct NvwalMdsBuffer** buffer) 
 {
   nvwal_error_t ret;
-  struct NvwalMdsBuffer* buf = bufmgr->write_buffers_[file->file_no_];
+  struct NvwalMdsBuffer* buf = &bufmgr->write_buffers_[file->file_no_];
   
   if (page_no == buf->page_no_) {
     /* do nothing: page is already allocated and buffered */
@@ -628,52 +720,6 @@ nvwal_error_t mds_bufmgr_alloc_page(
 /******************************************************************************
  * Meta-data store core methods
  *****************************************************************************/
-
-nvwal_error_t mds_init(
-  const struct NvwalConfig* config, 
-  struct NvwalContext* wal) 
-{
-  nvwal_error_t ret;
-  nvwal_error_t ret2;
-
-  struct NvwalMdsContext* mds = &(wal->mds_);
-  struct NvwalMdsIoContext* io = &(mds->io_);
-  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
-
-  memset(mds, 0, sizeof(*mds));
-  memcpy(&mds->config_, config, sizeof(*config));
-
-  ret = mds_io_init(config, io);
-  if (ret != 0) {
-    goto error_return;
-  }
-  ret = mds_bufmgr_init(config, bufmgr);
-  if (ret != 0) {
-    goto error_io_uninit;
-  }
-
-  return 0;
-
-error_io_uninit:
-  ret2 = mds_io_uninit(io);
-  assert(ret2 == 0);
-error_return:
-  return ret;
-}
-
-
-nvwal_error_t mds_uninit(struct NvwalContext* wal)
-{
-  struct NvwalMdsContext* mds = &(wal->mds_);
-  struct NvwalMdsIoContext* io = &(mds->io_);
-  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
-
-  mds_bufmgr_uninit(bufmgr);
-  mds_io_uninit(io);
-
-  return 0;
-}
-
 
 /** 
  * @details
@@ -717,7 +763,22 @@ static nvwal_epoch_t mds_latest_epoch_in_page(
 }
 
 
-nvwal_error_t mds_recover(struct NvwalContext* wal) 
+
+nvwal_epoch_t min_epoch_id(nvwal_epoch_t a, nvwal_epoch_t b) 
+{ 
+  return (a < b) ? a : b; 
+}
+
+
+/**
+ * @brief Performs recovery of the metadata store. 
+ *
+ * @param[in] wal nvwal context 
+ * 
+ * @details 
+ * Restores epoch metadata to the latest consistent durable state.
+ */
+static nvwal_error_t mds_recover(struct NvwalContext* wal) 
 {
   int i;
   struct NvwalMdsContext* mds = &(wal->mds_);
@@ -726,7 +787,7 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
 
   for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
     struct PageFile* file = mds->io_.active_files_[i];
-    struct NvwalMdsBuffer* buffer = bufmgr->write_buffers_[i];
+    struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[i];
     struct Page* page = mds_bufmgr_page(buffer);
 
     latest_epoch = mds_latest_epoch_in_page(mds, page);
@@ -741,11 +802,68 @@ nvwal_error_t mds_recover(struct NvwalContext* wal)
   return 0;
 }
 
+nvwal_error_t mds_init(
+  enum NvwalInitMode mode,
+  struct NvwalContext* wal) 
+{
+  nvwal_error_t ret;
+  nvwal_error_t ret2;
 
-nvwal_epoch_t min_epoch_id(nvwal_epoch_t a, nvwal_epoch_t b) 
-{ 
-  return (a < b) ? a : b; 
+  struct NvwalMdsContext* mds = &(wal->mds_);
+
+  memset(mds, 0, sizeof(*mds));
+
+  mds->wal_ = wal;
+
+  int io_did_restart;
+  ret = mds_io_init(mode, wal, &io_did_restart);
+  if (ret != 0) {
+    goto error_return;
+  }
+
+  int bufmgr_did_restart;
+  ret = mds_bufmgr_init(mode, wal, &bufmgr_did_restart);
+  if (ret != 0) {
+    goto error_io_uninit;
+  }
+
+  if (io_did_restart && bufmgr_did_restart) {
+    ret = mds_recover(wal);
+    if (ret != 0) {
+      goto error_io_uninit;
+    }
+  }
+
+  return 0;
+
+error_io_uninit:
+  ret2 = mds_io_uninit(wal);
+  assert(ret2 == 0);
+error_return:
+  return ret;
 }
+
+
+nvwal_error_t mds_uninit(struct NvwalContext* wal)
+{
+  nvwal_error_t ret;
+
+  ret = mds_bufmgr_uninit(wal);
+  if (ret != 0) {
+    goto error_return;
+  }
+  ret = mds_io_uninit(wal);
+  if (ret != 0) {
+    goto error_return;
+  }
+
+  return 0;
+
+error_return:
+  errno = ret;
+  return ret;
+}
+
 
 nvwal_error_t mds_epoch_iterator_prefetch(
   struct MdsEpochIterator* iterator)
@@ -759,14 +877,15 @@ nvwal_error_t mds_epoch_iterator_prefetch(
   page_no_t page_no = epoch_id_to_page_no(mds, cur_epoch_id);
   struct PageFile* file = mds_io_file(&mds->io_, file_no);
 
-  struct NvwalMdsBuffer* nvbuf = bufmgr->write_buffers_[file->file_no_];
+  struct NvwalMdsBuffer* nvbuf = &bufmgr->write_buffers_[file->file_no_];
   page_no_t nvbuf_page_no = nvwal_atomic_load(&nvbuf->page_no_);
 
   /* Try reading from nvram buffer. */
   if (nvbuf_page_no == page_no) {
     /* 
      * Optimistically read from the nvram buffer.
-     * Comments under mds_bufmgr_alloc_page explain the linearization point. 
+     * Please review comments under mds_bufmgr_alloc_page to understand 
+     * the linearization point. 
      */
     struct Page* page = mds_bufmgr_page(nvbuf);
     page_offset_t epoch_off = epoch_id_to_page_offset(mds, cur_epoch_id);
@@ -866,8 +985,10 @@ int mds_epoch_iterator_done(struct MdsEpochIterator* iterator)
 
 nvwal_error_t mds_epoch_iterator_destroy(struct MdsEpochIterator* iterator)
 {
-
+  memset(iterator, 0, sizeof(*iterator));
+  return 0;
 }
+
 
 nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal)
 {
@@ -875,7 +996,6 @@ nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal)
 
   return nvwal_atomic_load(&mds->latest_epoch_);
 }
-
 
 
 nvwal_error_t mds_write_epoch(
@@ -892,11 +1012,11 @@ nvwal_error_t mds_write_epoch(
   page_no_t page_no = epoch_id_to_page_no(mds, epoch_id);
   struct PageFile* file = mds_io_file(&mds->io_, file_no);
 
-  /* We are always guaranteed to have space in the page as we write epochs 
+  /* 
+   * We are always guaranteed to have space in the page as we write epochs 
    * sequentially. An epoch that requires a new page will request the next 
    * page_no.
    */  
-  /* TODO: do a sanity check of the above invariant: that the page has enough space */
   ret = mds_bufmgr_alloc_page(&mds->bufmgr_, file, page_no, &buffer);
 
   struct Page* page = mds_bufmgr_page(buffer);

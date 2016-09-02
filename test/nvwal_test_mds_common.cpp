@@ -39,7 +39,11 @@
 #include "nvwal_types.h"
 
 namespace nvwaltest {
-nvwal_error_t MdsTestContext::__init_internal(bool init_io, bool init_bufmgr, std::string unique_root_path, bool remove_all) 
+nvwal_error_t MdsTestContext::__init_internal(
+  bool init_io, 
+  bool init_bufmgr, 
+  std::string unique_root_path, 
+  enum NvwalInitMode mode) 
 {
   /* 
    * Record what components we initialized so that we properly uninitialize
@@ -48,7 +52,6 @@ nvwal_error_t MdsTestContext::__init_internal(bool init_io, bool init_bufmgr, st
   init_io_ = init_io;
   init_bufmgr_ = init_bufmgr;
 
-  bool create_all = false;
   boost::filesystem::path root_path;
 
   if (unique_root_path == "") {
@@ -59,12 +62,12 @@ nvwal_error_t MdsTestContext::__init_internal(bool init_io, bool init_bufmgr, st
   }
   unique_root_path_ = root_path.string();
 
-  if (remove_all) {
+  if (mode == kNvwalInitCreateTruncate) {
     boost::filesystem::remove_all(unique_root_path_);
-    create_all = true;
+    mode = kNvwalInitCreateIfNotExists;
   }
-
-  if (create_all) {
+  
+  if (mode == kNvwalInitCreateIfNotExists) {
     if (!boost::filesystem::create_directories(unique_root_path_)) {
       std::cerr << "MdsTestContext::init_all() : Fatal! failed to create the folder:"
          << unique_root_path_ << ". Check permissions etc." << std::endl;
@@ -87,7 +90,7 @@ nvwal_error_t MdsTestContext::__init_internal(bool init_io, bool init_bufmgr, st
     std::string w_str = std::to_string(w);
     boost::filesystem::path wal_root = root_path;
     wal_root /= w_str;
-    if (create_all) {
+    if (mode == kNvwalInitCreateIfNotExists) {
       if (!boost::filesystem::create_directory(wal_root)) {
         std::cerr << "MdsTestContext::init_all() : Fatal! failed to create the folder:"
           << wal_root.string() << ". Check permissions etc." << std::endl;
@@ -101,16 +104,19 @@ nvwal_error_t MdsTestContext::__init_internal(bool init_io, bool init_bufmgr, st
     std::memcpy(config.disk_root_, wal_root.string().data(), wal_root.string().length());
     std::memcpy(config.nv_root_, wal_root.string().data(), wal_root.string().length());
     config.mds_page_size_ = kNvwalMdsPageSize;
+    memcpy(&wal->config_, &config, sizeof(config));
 
     nvwal_error_t ret;
     if (init_io && init_bufmgr) {
-      ret = mds_init(&config, wal);
+      ret = mds_init(mode, wal);
     } else {
       if (init_io) {
-        ret = mds_io_init(&config, &(wal->mds_.io_));
+        int did_restart;
+        ret = mds_io_init(mode, wal, &did_restart);
       }
       if (init_bufmgr) {
-        ret = mds_bufmgr_init(&config, &(wal->mds_.bufmgr_));
+        int did_restart;
+        ret = mds_bufmgr_init(mode, wal, &did_restart);
       }
     }
     if (ret) {
@@ -135,10 +141,10 @@ nvwal_error_t MdsTestContext::__uninit_internal(bool uninit_io, bool uninit_bufm
       ret = mds_uninit(wal);
     } else {
       if (uninit_bufmgr) {
-        ret = mds_bufmgr_uninit(&wal->mds_.bufmgr_);
+        ret = mds_bufmgr_uninit(wal);
       }
       if (uninit_io) {
-        ret = mds_io_uninit(&wal->mds_.io_);
+        ret = mds_io_uninit(wal);
       }
     }
     if (ret) {

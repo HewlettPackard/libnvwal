@@ -41,7 +41,7 @@ extern "C" {
  *****************************************************************************/
 
 typedef uint64_t page_offset_t;
-typedef uint64_t page_no_t;
+typedef mds_page_no_t page_no_t;
 typedef uint64_t file_no_t;
 
 /**  
@@ -58,15 +58,6 @@ struct PageFile {
  */
 struct Page {
   struct MdsEpochMetadata epochs_[0];
-};
-
-/**
- * @brief Represents a volatile descriptor of a buffer frame mapped on NVRAM. 
- */
-struct NvwalMdsBuffer {
-  struct PageFile* file_;
-  page_no_t        page_no_;
-  void*            baseaddr_;
 };
 
 /******************************************************************************
@@ -91,7 +82,7 @@ static inline nvwal_epoch_t normalize_epoch_id(nvwal_epoch_t epoch_id)
  */
 static inline int max_epochs_per_page(struct NvwalMdsContext* mds)
 { 
-  return mds->config_.mds_page_size_ / sizeof(struct MdsEpochMetadata);
+  return mds->wal_->config_.mds_page_size_ / sizeof(struct MdsEpochMetadata);
 }
 
 /**
@@ -144,15 +135,22 @@ static inline off_t epoch_id_to_file_offset(struct NvwalMdsContext* mds, nvwal_e
 /**
  * @brief Initializes the I/O subsystem of the meta-data store.
  * 
+ * @param[in] mode Specifies whether we just restart or newly create
+ * @param[in] wal nvwal instance context
+ * @param[out] did_restart Indicates whether subsystem restarted successfully.
+ * 
  * @details
  * Opens metadata page files. If the page files do not exist, it creates them. 
  */
-nvwal_error_t mds_io_init(const struct NvwalConfig* config, struct NvwalMdsIoContext* io);
+nvwal_error_t mds_io_init(
+  enum NvwalInitMode mode, 
+  struct NvwalContext* wal, 
+  int* did_restart);
 
 /**
  * @brief Unitializes the I/O subsystem of the meta-data store.
  */
-nvwal_error_t mds_io_uninit(struct NvwalMdsIoContext* io);
+nvwal_error_t mds_io_uninit(struct NvwalContext* wal);
 
 /**
  * @brief Opens a page file and provides a page-file descriptor for this file.
@@ -206,6 +204,10 @@ nvwal_error_t mds_io_append_page(
 /**
  * @brief Initializes the buffer manager of the meta-data store.
  *
+ * @param[in] mode Specifies whether we just restart or newly create
+ * @param[in] wal nvwal instance context
+ * @param[out] did_restart Indicates whether subsystem restarted successfully.
+ * 
  * @details
  * As part of the initialization, the buffer manager remaps any NVRAM
  * buffers. However, the user is still responsible to assign NVRAM
@@ -213,15 +215,16 @@ nvwal_error_t mds_io_append_page(
  * followed by the user. 
  */
 nvwal_error_t mds_bufmgr_init(
-  const struct NvwalConfig* config, 
-  struct NvwalMdsBufferManagerContext* bufmgr);
+  enum NvwalInitMode mode, 
+  struct NvwalContext* wal,
+  int* did_restart);
 
 
 /**
  * @brief Unitializes the buffer manager.
  */
 nvwal_error_t mds_bufmgr_uninit(
-  struct NvwalMdsBufferManagerContext* bufmgr);
+  struct NvwalContext* wal);
 
 #ifdef __cplusplus
 }

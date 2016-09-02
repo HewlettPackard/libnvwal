@@ -50,18 +50,8 @@ extern "C" {
  *
  */
 nvwal_error_t mds_init(
-  const struct NvwalConfig* config, 
+  enum NvwalInitMode mode,
   struct NvwalContext* wal);
-
-/**
- * @brief Performs recovery of the metadata store. 
- *
- * @param[in] wal nvwal context 
- * 
- * @details 
- * Restores epoch metadata to the latest consistent durable state.
- */
-nvwal_error_t mds_recover(struct NvwalContext* wal);
 
 /**
  * @brief Uninitializes the metadata store.

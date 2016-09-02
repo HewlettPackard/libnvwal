@@ -67,28 +67,28 @@ class MdsTestContext {
   /**
    * Complete initialization. Don't forget to check the return code!
    */
-  nvwal_error_t init_all(std::string root_path = "", bool remove_all = true) {
-    return __init_internal(true, true, root_path, remove_all);
+  nvwal_error_t init_all(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate) {
+    return __init_internal(true, true, root_path, mode);
   }
 
   /**
    * Partial initialization: initialize I/O subsystem only.
    */
-  nvwal_error_t init_io(std::string root_path = "", bool remove_all = true) {
-    return __init_internal(true, false, root_path, remove_all);
+  nvwal_error_t init_io(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate) {
+    return __init_internal(true, false, root_path, mode);
   }
 
   /**
    * Partial initialization: initialize buffer subsystem only.
    */
-  nvwal_error_t init_bufmgr(std::string root_path = "", bool remove_all = true) {
-    return __init_internal(false, true, root_path, remove_all);
+  nvwal_error_t init_bufmgr(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate) {
+    return __init_internal(false, true, root_path, mode);
   }
 
   /**
    * Most initialization happens here. Don't forget to check the return code!
    */
-  nvwal_error_t __init_internal(bool init_io, bool init_bufmgr, std::string root_path, bool remove_all);
+  nvwal_error_t __init_internal(bool init_io, bool init_bufmgr, std::string root_path, enum NvwalInitMode mode);
 
   nvwal_error_t uninit_all(bool remove_all = true) {
     return __uninit_internal(true, true, remove_all);
