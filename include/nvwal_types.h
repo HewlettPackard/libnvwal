@@ -169,6 +169,9 @@ typedef int8_t    nvwal_byte_t;
 /** Metadata store page number */
 typedef uint64_t mds_page_no_t;
 
+/** Metadata store page-file number */
+typedef uint64_t mds_file_no_t;
+
 /**
  * @brief Unique identifier for a \b Durable (or disk-resident) \b Segment.
  * @details
@@ -616,6 +619,16 @@ struct NvwalLogSegment {
   */
 };
 
+/**  
+ * @brief Represents a metadata store page-file descriptor structure.
+ */
+struct NvwalMdsPageFile {
+  int active_;
+  struct NvwalMdsIoContext* io_;
+  mds_file_no_t file_no_;
+  int fd_;
+};
+
 /**
  * @brief Represents a context of a meta-data-store I/O subsystem instance.
  */
@@ -623,8 +636,8 @@ struct NvwalMdsIoContext {
   /** Nvwal context containing this context */
   struct NvwalContext* wal_;
 
-  /** Active (open) page files */
-  struct PageFile* active_files_[kNvwalMdsMaxActivePagefiles];
+  /** Page file descriptors */
+  struct NvwalMdsPageFile files_[kNvwalMdsMaxActivePagefiles];
 
   /** Buffers */
   struct NvwalMdsBuffer* write_buffers_[kNvwalMdsMaxActivePagefiles];
@@ -634,7 +647,7 @@ struct NvwalMdsIoContext {
  * @brief Represents a volatile descriptor of a buffer frame mapped on NVRAM. 
  */
 struct NvwalMdsBuffer {
-  struct PageFile* file_;
+  struct NvwalMdsPageFile* file_;
   mds_page_no_t page_no_;
   void* baseaddr_;
 };

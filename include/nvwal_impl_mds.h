@@ -42,16 +42,8 @@ extern "C" {
 
 typedef uint64_t page_offset_t;
 typedef mds_page_no_t page_no_t;
+typedef mds_file_no_t file_no_t;
 typedef uint64_t file_no_t;
-
-/**  
- * @brief Represents a page-file descriptor structure.
- */
-struct PageFile {
-  struct NvwalMdsIoContext* io_;
-  file_no_t file_no_;
-  int       fd_;
-};
 
 /**
  * @brief Represents a page containing epoch metadata.
@@ -157,16 +149,14 @@ nvwal_error_t mds_io_uninit(struct NvwalContext* wal);
  */
 nvwal_error_t mds_io_open_file(
   struct NvwalMdsIoContext* io, 
-  file_no_t file_no,
-  struct PageFile** file);
+  file_no_t file_no);
 
 /**
  * @brief Creates a page file and provides a page-file descriptor for this file.
  */
 nvwal_error_t mds_io_create_file(
   struct NvwalMdsIoContext* io, 
-  file_no_t file_no, 
-  struct PageFile** file);
+  file_no_t file_no);
 
 /**
  * @brief Closes a page file.
@@ -176,12 +166,12 @@ nvwal_error_t mds_io_create_file(
  */
 void mds_io_close_file(
   struct NvwalMdsIoContext* io,
-  struct PageFile* file);
+  file_no_t file_no);
 
 /**
  * @brief Returns the page-file descriptor to a given page file.
  */
-struct PageFile* mds_io_file(
+struct NvwalMdsPageFile* mds_io_file(
   struct NvwalMdsIoContext* io, 
   file_no_t file_no);
 
@@ -198,7 +188,7 @@ struct PageFile* mds_io_file(
  *  
  */
 nvwal_error_t mds_io_append_page(
-  struct PageFile* file,
+  struct NvwalMdsPageFile* file,
   const void* buf);
 
 /**

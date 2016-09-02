@@ -68,31 +68,6 @@ int strcat_s(char *dest, size_t destsz, const char* src)
  * Meta-data store I/O subsystem functions
  *****************************************************************************/
 
-/**
- * @brief Allocates and initializes a page-file descriptor.
- * 
- * @details
- * Memory allocated for the returned descriptor can be freed using free().
- */
-static struct PageFile* alloc_page_file_desc(
-  struct NvwalMdsIoContext* io, 
-  file_no_t file_no, 
-  int fd)
-{
-  struct PageFile* file;
-
-  if (!(file = malloc(sizeof(*file)))) {
-    return NULL;
-  }
-
-  file->io_ = io;
-  file->file_no_ = file_no;
-  file->fd_ = fd;
-  
-  return file;
-}
-
-
 static nvwal_error_t mds_io_file_exists(
   struct NvwalMdsIoContext* io, 
   file_no_t file_no)
@@ -111,11 +86,24 @@ static nvwal_error_t mds_io_file_exists(
   return ret == 0;
 }
 
+/**
+ * @brief Initializes and marks file descriptor as active.
+ */
+static void mds_io_activate_file(
+  struct NvwalMdsIoContext* io,
+  file_no_t file_no,
+  int fd)
+{
+  struct NvwalMdsPageFile* file = mds_io_file(io, file_no);
+  file->active_ = 1;
+  file->io_ = io;
+  file->file_no_ = file_no;
+  file->fd_ = fd;
+}
 
 nvwal_error_t mds_io_open_file(
   struct NvwalMdsIoContext* io, 
-  file_no_t file_no,
-  struct PageFile** file)
+  file_no_t file_no)
 {
   nvwal_error_t ret;
   int fd = -1;
@@ -135,8 +123,7 @@ nvwal_error_t mds_io_open_file(
     goto error_return;
   }
 
-  *file = alloc_page_file_desc(io, file_no, fd);
-  assert(*file);
+  mds_io_activate_file(io, file_no, fd);
 
   return 0;
  
@@ -148,8 +135,7 @@ error_return:
 
 nvwal_error_t mds_io_create_file(
   struct NvwalMdsIoContext* io, 
-  file_no_t file_no, 
-  struct PageFile** file)
+  file_no_t file_no)
 {
   nvwal_error_t ret;
   int fd = -1;
@@ -179,8 +165,7 @@ nvwal_error_t mds_io_create_file(
     goto error_return;
   }
  
-  *file = alloc_page_file_desc(io, file_no, fd);
-  assert(*file);
+  mds_io_activate_file(io, file_no, fd);
 
   return ret;
  
@@ -192,26 +177,27 @@ error_return:
 
 void mds_io_close_file(
   struct NvwalMdsIoContext* io,
-  struct PageFile* file)
+  file_no_t file_no)
 {
+  struct NvwalMdsPageFile* file = mds_io_file(io, file_no);
   close(file->fd_);
-  free(file);  
+  io->files_[file_no].active_ = 0;
 }
 
 
-inline struct PageFile* mds_io_file(
+inline struct NvwalMdsPageFile* mds_io_file(
   struct NvwalMdsIoContext* io, 
   file_no_t file_no)
 {
   if (file_no > kNvwalMdsMaxActivePagefiles - 1) {
     return NULL;
   }
-  return io->active_files_[file_no];
+  return &io->files_[file_no];
 }
 
 
 nvwal_error_t mds_io_pread(
-  struct PageFile* file, 
+  struct NvwalMdsPageFile* file, 
   void* buf, 
   size_t count, 
   off_t offset)
@@ -239,7 +225,7 @@ error_return:
 
 
 nvwal_error_t mds_io_append_page(
-  struct PageFile* file,
+  struct NvwalMdsPageFile* file,
   const void* buf)
 {
   nvwal_error_t ret;
@@ -268,9 +254,12 @@ error_return:
 /**
  * @brief Ensure atomicity of last append.
  */
-static nvwal_error_t mds_io_recovery_complete_append_page(struct PageFile* file)
+static nvwal_error_t mds_io_recovery_complete_append_page(
+  struct NvwalMdsIoContext* io, 
+  file_no_t file_no)
 {
   struct stat buf;
+  struct NvwalMdsPageFile* file = mds_io_file(io, file_no);
 
   nvwal_error_t ret = fstat(file->fd_, &buf);
   if (ret != 0) {
@@ -306,7 +295,7 @@ nvwal_error_t mds_io_init(
   int* did_restart)
 {
   nvwal_error_t ret;
-  struct PageFile* pf;
+  struct NvwalMdsPageFile* pf;
 
   struct NvwalMdsContext* mds = &(wal->mds_);
   struct NvwalMdsIoContext* io = &(mds->io_);
@@ -331,13 +320,14 @@ nvwal_error_t mds_io_init(
        num_existing == kNvwalMdsMaxActivePagefiles))
   {
     for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-      ret = mds_io_open_file(io, i, &pf);
+      ret = mds_io_open_file(io, i);
       if (ret != 0) {
+        printf("ERROR: 1\n");
         goto error_return;
       }
-      io->active_files_[i] = pf;
-      ret = mds_io_recovery_complete_append_page(pf);
+      ret = mds_io_recovery_complete_append_page(io, i);
       if (ret != 0) {
+        printf("ERROR: 2\n");
         goto error_return;
       }
     }
@@ -350,11 +340,10 @@ nvwal_error_t mds_io_init(
       num_existing == 0)
   {
     for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-      ret = mds_io_create_file(io, i, &pf);
+      ret = mds_io_create_file(io, i);
       if (ret != 0) {
         goto error_return;
       }
-      io->active_files_[i] = pf;
     }
     return 0;  
   }
@@ -373,9 +362,8 @@ nvwal_error_t mds_io_uninit(struct NvwalContext* wal)
   struct NvwalMdsIoContext* io = &(mds->io_);
 
   for (int i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    if (io->active_files_[i]) {
-      mds_io_close_file(io, io->active_files_[i]);   
-      io->active_files_[i] = NULL;
+    if (io->files_[i].active_) {
+      mds_io_close_file(io, i);
     }
   }
   return 0;
@@ -693,7 +681,7 @@ static inline struct Page* mds_bufmgr_page(struct NvwalMdsBuffer* buffer)
  */
 nvwal_error_t mds_bufmgr_alloc_page(
   struct NvwalMdsBufferManagerContext* bufmgr, 
-  struct PageFile* file, 
+  struct NvwalMdsPageFile* file, 
   page_no_t page_no, 
   struct NvwalMdsBuffer** buffer) 
 {
@@ -786,7 +774,7 @@ static nvwal_error_t mds_recover(struct NvwalContext* wal)
   nvwal_epoch_t latest_epoch;
 
   for (i=0; i<kNvwalMdsMaxActivePagefiles; i++) {
-    struct PageFile* file = mds->io_.active_files_[i];
+    struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, i);
     struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[i];
     struct Page* page = mds_bufmgr_page(buffer);
 
@@ -875,7 +863,7 @@ nvwal_error_t mds_epoch_iterator_prefetch(
   nvwal_epoch_t cur_epoch_id = iterator->cur_epoch_id_;
   file_no_t file_no = epoch_id_to_file_no(mds, cur_epoch_id);
   page_no_t page_no = epoch_id_to_page_no(mds, cur_epoch_id);
-  struct PageFile* file = mds_io_file(&mds->io_, file_no);
+  struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, file_no);
 
   struct NvwalMdsBuffer* nvbuf = &bufmgr->write_buffers_[file->file_no_];
   page_no_t nvbuf_page_no = nvwal_atomic_load(&nvbuf->page_no_);
@@ -1010,7 +998,7 @@ nvwal_error_t mds_write_epoch(
 
   file_no_t file_no = epoch_id_to_file_no(mds, epoch_id);
   page_no_t page_no = epoch_id_to_page_no(mds, epoch_id);
-  struct PageFile* file = mds_io_file(&mds->io_, file_no);
+  struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, file_no);
 
   /* 
    * We are always guaranteed to have space in the page as we write epochs 

@@ -45,7 +45,7 @@ TEST(NvwalMdsIoTest, AppendPage)
   EXPECT_EQ(0, context.init_io());
 
   NvwalContext* wal = context.get_wal(0);
-  struct PageFile* file = mds_io_file(&wal->mds_.io_, 0);
+  struct NvwalMdsPageFile* file = mds_io_file(&wal->mds_.io_, 0);
   void* pagebuf = malloc(wal->config_.mds_page_size_);
   memset(pagebuf, 0, wal->config_.mds_page_size_);
   ASSERT_NE((void*) NULL, pagebuf);
