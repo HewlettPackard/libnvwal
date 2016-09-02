@@ -58,24 +58,6 @@ function (add_nvwal_test_individual_without_valgrind targetname individual_tests
       COMMAND ${targetname}
         --gtest_filter=*.${individual_test}
         --gtest_output=xml:${NVWAL_TEST_REPORT_DIR}/${targetname}_${individual_test}.xml)
-    if(${enable_valgrind})
-      # also add valgrind version. This version takes long, so you might want to exclude
-      # them from ctest by "ctest -E valgrind".
-      # To pick up valgrind report xml files from Jenkins,
-      # Set "valgrind-reports/*.xml" as the valgrind plugin filter.
-      add_test(
-        NAME valgrind_${targetname}_${individual_test}
-        COMMAND
-          ${MEMORYCHECK_COMMAND}
-          --xml=yes --xml-file=${NVWAL_VALGRIND_REPORT_DIR}/${targetname}_${individual_test}.xml
-          --error-exitcode=1 --leak-check=full --gen-suppressions=all
-          # removed --show-leak-kinds=all, which is supported only by valgrind 3.9 and later
-          --suppressions=${NVWAL_SRC_ROOT}/scripts/valgrind.supp
-          ./${targetname}
-          --gtest_filter=*.${individual_test}
-          --gtest_output=xml:${NVWAL_TEST_REPORT_DIR}/valgrind_${targetname}_${individual_test}.xml
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-    endif()
   endforeach(individual_test individual_tests)
 endfunction()
 
@@ -90,7 +72,7 @@ function (add_nvwal_test_individual_valgrind targetname individual_tests)
       COMMAND
         ${MEMORYCHECK_COMMAND}
         --xml=yes --xml-file=${NVWAL_VALGRIND_REPORT_DIR}/${targetname}_${individual_test}.xml
-        --error-exitcode=1 --leak-check=full --gen-suppressions=all
+        --error-exitcode=1 --leak-check=full --track-fds=yes --gen-suppressions=all
         # removed --show-leak-kinds=all, which is supported only by valgrind 3.9 and later
         --suppressions=${NVWAL_SRC_ROOT}/scripts/valgrind.supp
         ./${targetname}

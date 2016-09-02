@@ -491,7 +491,7 @@ nvwal_error_t impl_init_no_error_handling(
   wal->largest_dsid_ = 0;
 
   /* Initialize Metadata Store */
-  /* NVWAL_CHECK_ERROR(mds_init(&wal->config_, wal)); */
+  NVWAL_CHECK_ERROR(mds_init(mode, wal));
 
   /* Initialize the reader context */
   /* ret = reader_init(&wal->reader_); */
@@ -679,9 +679,9 @@ nvwal_error_t nvwal_impl_uninit(
   /** uninit continues as much as possible even after an error. */
   nvwal_error_t last_seen_error = 0;
 
-  /*last_seen_error = nvwal_stock_error_code(
+  last_seen_error = nvwal_stock_error_code(
     last_seen_error,
-    mds_uninit(wal));*/
+    mds_uninit(wal));
 
   for (int i = 0; i < wal->segment_count_; ++i) {
     last_seen_error = nvwal_stock_error_code(
