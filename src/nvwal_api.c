@@ -261,6 +261,26 @@ nvwal_error_t nvwal_flusher_main(
   return error_code;
 }
 
+/**
+ * Invoked from flusher_main_loop to durably bump up paged_mds_epoch_.
+ */
+nvwal_error_t flusher_update_mpe(struct NvwalContext* wal, nvwal_epoch_t new_mpe) {
+  assert(nvwal_is_epoch_equal_or_after(
+    new_mpe,
+    wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
+  nvwal_atomic_store(&wal->nv_control_block_->flusher_progress_.paged_mds_epoch_, new_mpe);
+
+  if (msync(
+    &wal->nv_control_block_->flusher_progress_.paged_mds_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_),
+    MS_SYNC)) {
+    assert(errno);
+    return errno;
+  }
+
+  return 0;
+}
+
 nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
   uint8_t* const thread_state = &wal->flusher_thread_state_;
   /**
@@ -275,6 +295,13 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
   const nvwal_epoch_t target_epoch
     = nvwal_increment_epoch(wal->durable_epoch_);
   const uint8_t is_stable_epoch = (target_epoch == wal->stable_epoch_);
+
+  if (wal->flusher_current_epoch_head_dsid_ == 0) {
+    const struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
+    wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
+    assert(wal->flusher_current_epoch_head_dsid_);
+    wal->flusher_current_epoch_head_offset_ = cur_segment->written_bytes_;
+  }
 
   /*
    * We don't make things durable for each writer-traversal.
@@ -296,6 +323,40 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
     if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
       break;
     }
+  }
+
+  if (is_stable_epoch && target_epoch != wal->durable_epoch_) {
+    /* We wrote out all logs in this epoch! Now we can bump up DE */
+    struct MdsEpochMetadata new_meta;
+    new_meta.epoch_id_ = target_epoch;
+    new_meta.from_seg_id_ = wal->flusher_current_epoch_head_dsid_;
+    new_meta.from_offset_ = wal->flusher_current_epoch_head_offset_;
+    const struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
+    new_meta.to_seg_id_ = cur_segment->dsid_;
+    new_meta.to_off_ = cur_segment->written_bytes_;
+
+    const nvwal_error_t mds_ret = mds_write_epoch(wal, &new_meta);
+    if (mds_ret) {
+      if (mds_ret == ENOBUFS) {
+        /* This is an expected error saying that we should trigger paging */
+        const nvwal_epoch_t new_paged_epoch = wal->durable_epoch_;
+        /* TODO NVWAL_CHECK_ERROR(mds_evict_page(wal, new_paged_epoch)); */
+
+        /* Also durably record that we paged MDS */
+        NVWAL_CHECK_ERROR(flusher_update_mpe(wal, new_paged_epoch));
+
+        /* Then try again. This time it should succeed */
+        NVWAL_CHECK_ERROR(mds_write_epoch(wal, &new_meta));
+      } else {
+        return mds_ret;
+      }
+    }
+
+    nvwal_atomic_store(&wal->nv_control_block_->flusher_progress_.durable_epoch_, target_epoch);
+    nvwal_atomic_store(&wal->durable_epoch_, target_epoch);
+
+    wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
+    wal->flusher_current_epoch_head_offset_ = cur_segment->written_bytes_;
   }
 
   return 0;

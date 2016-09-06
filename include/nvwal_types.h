@@ -450,8 +450,19 @@ struct NvwalControlBlockFlusherProgress {
    */
   nvwal_epoch_t durable_epoch_;
 
+  /**
+   * Paged MDS Epoch (PME) is the epoch up to which
+   * MDS durably wrote to disk, rather than NVDIMM.
+   * We bump this up when we trigger paging on MDS.
+   * We durably bump this up \b after MDS durably copies to disk
+   * and \b before MDS recycles the MDS buffer.
+   * Invalid epoch means MDS hasn't written to disk yet.
+   */
+  nvwal_epoch_t paged_mds_epoch_;
+
   char cacheline_pad_[64
   - sizeof(nvwal_epoch_t)  /* durable_epoch_ */
+  - sizeof(nvwal_epoch_t)  /* paged_mds_epoch_ */
   ];
 };
 
@@ -828,6 +839,15 @@ struct NvwalContext {
 
   /** Index into segment[] */
   uint32_t cur_seg_idx_;
+
+  /**
+   * Where the flusher started writing logs in the currently-writing epoch,
+   * which is probably stable epoch. This only tells the DSID, not whether
+   * it's already synced to disc or still in NVDIMM.
+   */
+  nvwal_dsid_t flusher_current_epoch_head_dsid_;
+  /** Byte offset in the segment */
+  uint64_t     flusher_current_epoch_head_offset_;
 
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 
