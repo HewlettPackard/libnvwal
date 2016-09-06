@@ -631,24 +631,19 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
 
 nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
-  nvwal_error_t ret;
-  int disk_fd;
-  char disk_path[kNvwalMaxPathLength];
-  uint64_t total_writen, written;
-
   assert(segment->dsid_);
   assert(!segment->fsync_completed_);
-  ret = 0;
-  disk_fd = 0;
-  total_writen = 0;
-  written = 0;
+  nvwal_error_t ret = 0;
+  uint64_t total_writen = 0;
+  uint64_t written = 0;
   segment->fsync_error_ = 0;
+  char disk_path[kNvwalMaxPathLength];
   nvwal_construct_disk_segment_path(
     segment->parent_,
     segment->dsid_,
     disk_path);
 
-  disk_fd = nvwal_open_best_effort_o_direct(
+  int disk_fd = nvwal_open_best_effort_o_direct(
     disk_path,
     O_CREAT | O_RDWR,
     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
@@ -685,6 +680,15 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
   nvwal_open_and_fsync(segment->parent_->config_.disk_root_);
 
   nvwal_atomic_store(&(segment->fsync_completed_), 1U);
+
+  /* Durably bump up CB's progress info */
+  assert(segment->dsid_
+    > segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
+  segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_ = segment->dsid_;
+  pmem_persist(
+    &segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_,
+    sizeof(segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_));
+
   return 0;
 
 error_return:

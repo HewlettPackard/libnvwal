@@ -330,7 +330,10 @@ nvwal_error_t open_control_file(
   }
 
   /** Take the image of previous config as of this point. */
-  memcpy(&wal->prev_config_, &wal->nv_control_block_->config_, sizeof(struct NvwalConfig));
+  pmem_memcpy_persist(
+    &wal->prev_config_,
+    &wal->nv_control_block_->config_,
+    sizeof(struct NvwalConfig));
 
   return 0;
 }
