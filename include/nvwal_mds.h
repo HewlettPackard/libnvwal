@@ -87,7 +87,7 @@ nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal);
  *
  * @param[in] wal WAL context instance.
  * @param[in] begin_epoch_id Starting epoch of the range.
- * @param[in] end_epoch_id Ending epoch of the range.
+ * @param[in] end_epoch_id Inclusive ending epoch of the range.
  * @param[out] iterator The iterator instance to initialize.
  * 
  * @details
@@ -120,6 +120,16 @@ int mds_epoch_iterator_done(struct MdsEpochIterator* iterator);
  * @param[in] iterator The iterator instance to destroy.
  */
 nvwal_error_t mds_epoch_iterator_destroy(struct MdsEpochIterator* iterator);
+
+/**
+ * @brief Truncates the metadata log so that the last epoch stored in the log 
+ * matches given \a epoch.
+ * 
+ * @param[in] epoch Epoch to roll back to.
+ */
+nvwal_error_t mds_rollback_to_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t epoch);
 
 #ifdef __cplusplus
 }

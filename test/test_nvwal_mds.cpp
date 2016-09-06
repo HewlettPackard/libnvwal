@@ -61,6 +61,7 @@ void write_multiple_epoch_batches(
 {
   struct NvwalContext* wal;
   for (int i=0; i < num_epoch_batch; i++) {
+    std::cout << "WRITE BATCH" << std::endl;
     /* write batch */
     wal = context.get_wal(0);
     nvwal_epoch_t low = (i==0) ? 1 : batch_last_epoch[i-1]+1;
