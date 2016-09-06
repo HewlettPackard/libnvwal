@@ -23,6 +23,27 @@ mark_as_advanced(NVWAL_SRC_ROOT NVWAL_BIN_ROOT
 #               Compiler Options  : BEGIN
 #
 #############################################################################
+# To avoid misuse, the user must specify -DCMAKE_BUILD_TYPE=Debug/Release/etc.
+# We observed so many people compiling without optimizations and then
+# being surprised by performance or lack of debug symbols.
+# If everyone is familiar with CMake, we wouldn't have to worry about this..
+string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_BUILD_TYPE)
+if(UPPER_BUILD_TYPE STREQUAL "DEBUG")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_CMAKE_DEBUG_BUILD")
+  MESSAGE(STATUS "[Build Type] Debug build specified.")
+elseif(UPPER_BUILD_TYPE STREQUAL "RELEASE")
+  MESSAGE(STATUS "[Build Type] Release build specified.")
+elseif(UPPER_BUILD_TYPE STREQUAL "RELWITHDEBINFO")
+  MESSAGE(STATUS "[Build Type] RelWithDebInfo build specified.")
+elseif(UPPER_BUILD_TYPE STREQUAL "MINSIZEREL")
+  MESSAGE(STATUS "[Build Type] MinSizeRel build specified.")
+else()
+  MESSAGE(FATAL_ERROR
+    " [Build Type] No build type was specified. Please invoke cmake with a valid build type."
+    " e.g., mkdir release; cd release; cmake ../ -DCMAKE_BUILD_TYPE=Release"
+    " Debug/Release/RelWithDebInfo/MinSizeRel are supported.")
+endif()
+
 # We currently do not link to libnuma.
 # The client program can optionally put NUMA affinity before calling libnvwal
 # find_package(Numa REQUIRED)

@@ -30,6 +30,7 @@
 #include "nvwal_atomics.h"
 #include "nvwal_api.h"
 #include "nvwal_mds.h"
+#include "nvwal_mds_types.h"
 #include "nvwal_util.h"
 
 
@@ -431,12 +432,14 @@ nvwal_error_t check_adjust_on_prev_config(
 /** subroutine of nvwal_init() used to create fresh new segment, not during restart */
 nvwal_error_t init_fresh_nvram_segment(
   struct NvwalContext * wal,
+  uint32_t nv_segment_index,
   struct NvwalLogSegment* segment);
 
 
 /** subroutine of nvwal_init() used to load an existing segment during restart */
 nvwal_error_t init_existing_nvram_segment(
   struct NvwalContext * wal,
+  uint32_t nv_segment_index,
   struct NvwalLogSegment* segment);
 
 nvwal_error_t impl_init_no_error_handling(
@@ -487,9 +490,6 @@ nvwal_error_t impl_init_no_error_handling(
     writer->buffer_ = config->writer_buffers_[i];
   }
 
-  /** TODO we must retrieve this from MDS in restart case */
-  wal->largest_dsid_ = 0;
-
   /* Initialize Metadata Store */
   NVWAL_CHECK_ERROR(mds_init(mode, wal));
 
@@ -498,11 +498,11 @@ nvwal_error_t impl_init_no_error_handling(
 
   /* Initialize all nv segments */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
-    wal->segments_[i].nv_segment_index_ = i;
+    struct NvwalLogSegment* segment = wal->segments_ + i;
     if (wal->prev_config_.libnvwal_version_) {
-      NVWAL_CHECK_ERROR(init_existing_nvram_segment(wal, wal->segments_ + i));
+      NVWAL_CHECK_ERROR(init_existing_nvram_segment(wal, i, segment));
     } else {
-      NVWAL_CHECK_ERROR(init_fresh_nvram_segment(wal, wal->segments_ + i));
+      NVWAL_CHECK_ERROR(init_fresh_nvram_segment(wal, i, segment));
     }
   }
 
@@ -550,15 +550,15 @@ nvwal_error_t nvwal_impl_init(
 
 nvwal_error_t init_fresh_nvram_segment(
   struct NvwalContext* wal,
+  uint32_t nv_segment_index,
   struct NvwalLogSegment* segment) {
-  char nv_path[kNvwalMaxPathLength];
-  segment->dsid_ = wal->largest_dsid_ + 1;
-  wal->largest_dsid_ = segment->dsid_;
-  segment->nv_fd_ = 0;
-  segment->nv_baseaddr_ = 0;
+  segment->dsid_ = nv_segment_index + 1U;  /* As this is the "first round" */
+  segment->nv_segment_index_ = nv_segment_index;
   segment->parent_ = wal;
-  nvwal_construct_nv_segment_path(wal, segment->nv_segment_index_, nv_path);
+  segment->written_bytes_ = 0;
 
+  char nv_path[kNvwalMaxPathLength];
+  nvwal_construct_nv_segment_path(wal, segment->nv_segment_index_, nv_path);
   segment->nv_fd_ = nvwal_open_best_effort_o_direct(
     nv_path,
     O_CREAT | O_RDWR,
@@ -614,15 +614,13 @@ nvwal_error_t init_fresh_nvram_segment(
 
 nvwal_error_t init_existing_nvram_segment(
   struct NvwalContext* wal,
+  uint32_t nv_segment_index,
   struct NvwalLogSegment* segment) {
-  char nv_path[kNvwalMaxPathLength];
-  segment->dsid_ = wal->largest_dsid_ + 1;
-  wal->largest_dsid_ = segment->dsid_;
-  segment->nv_fd_ = 0;
-  segment->nv_baseaddr_ = 0;
+  segment->nv_segment_index_ = nv_segment_index;
   segment->parent_ = wal;
-  nvwal_construct_nv_segment_path(wal, segment->nv_segment_index_, nv_path);
 
+  char nv_path[kNvwalMaxPathLength];
+  nvwal_construct_nv_segment_path(wal, segment->nv_segment_index_, nv_path);
   segment->nv_fd_ = nvwal_open_best_effort_o_direct(nv_path, O_RDWR, 0);
 
   if (segment->nv_fd_ == -1) {
@@ -656,6 +654,42 @@ nvwal_error_t init_existing_nvram_segment(
     return errno;
   }
   assert(segment->nv_baseaddr_);
+
+
+  /* In restart case, we need to figure out dsid and written_bytes_ */
+  const nvwal_dsid_t ondisk_from
+    = wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_;
+  const uint32_t synced_cycles = (ondisk_from - 1U) / wal->segment_count_;
+  nvwal_dsid_t dsid = synced_cycles * wal->segment_count_ + nv_segment_index + 1U;
+  if (dsid > ondisk_from) {
+    /** This means this segment in this cycle was yet to be synced to disk */
+    assert(dsid < ondisk_from + wal->segment_count_);
+  } else {
+    /** This segment in this cycle was synced! The NV-segment is in next cycle */
+    dsid += wal->segment_count_;
+  }
+
+  assert(dsid > 0);
+  assert(((dsid - 1U) % wal->segment_count_) == nv_segment_index);
+  segment->dsid_ = dsid;
+  /** TODO */
+  if (dsid == ondisk_from) {
+    /** This is the segment we were writing to as of prev. shutdown */
+    if (wal->durable_epoch_ != kNvwalInvalidEpoch) {
+      assert(mds_latest_epoch(wal) == wal->durable_epoch_);
+      struct MdsEpochIterator mds_iterator;
+      NVWAL_CHECK_ERROR(mds_epoch_iterator_init(
+        wal,
+        wal->durable_epoch_,
+        wal->durable_epoch_,
+        &mds_iterator));
+      assert(!mds_epoch_iterator_done(&mds_iterator));
+      assert(mds_iterator.epoch_metadata_->epoch_id_  == wal->durable_epoch_);
+      /* mds_iterator.epoch_metadata_->to_seg_id_; */
+      NVWAL_CHECK_ERROR(mds_epoch_iterator_destroy(&mds_iterator));
+    }
+  } else {
+  }
 
   return 0;
 }

@@ -829,12 +829,6 @@ struct NvwalContext {
   /** Index into segment[] */
   uint32_t cur_seg_idx_;
 
-  /**
-   * Existing largest DSID issued so far.
-   * When we recycle a new segment next time, we will issue this number +1.
-   */
-  nvwal_dsid_t largest_dsid_;
-
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 
   /**

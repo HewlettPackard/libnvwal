@@ -400,6 +400,10 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
 nvwal_error_t flusher_move_onto_next_nv_segment(
   struct NvwalContext* wal) {
   struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
+  assert(cur_segment->nv_segment_index_ == wal->cur_seg_idx_);
+  assert(cur_segment->dsid_ > 0);
+  assert((cur_segment->dsid_ - 1U) % wal->segment_count_
+    == cur_segment->nv_segment_index_);
   assert(cur_segment->written_bytes_ == wal->config_.segment_size_);
   assert(cur_segment->fsync_requested_ == 0);
   assert(cur_segment->fsync_error_ == 0);
@@ -430,8 +434,9 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   /** TODO check if any epoch-cursor is now reading from this */
 
   /** Ok, let's recycle */
-  new_segment->dsid_ = wal->largest_dsid_ + 1;
-  wal->largest_dsid_ = new_segment->dsid_;
+  assert(new_segment->dsid_ > 0);
+  assert((new_segment->dsid_ - 1U) % wal->segment_count_ == new_index);
+  new_segment->dsid_ += wal->segment_count_;
   new_segment->written_bytes_ = 0;
   new_segment->fsync_completed_ = 0;
   new_segment->fsync_error_ = 0;
