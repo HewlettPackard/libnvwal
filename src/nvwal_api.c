@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libpmem.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -262,21 +263,35 @@ nvwal_error_t nvwal_flusher_main(
 }
 
 /**
- * Invoked from flusher_main_loop to durably bump up paged_mds_epoch_.
+ * Invoked from flusher_main_loop to durably bump up CB's paged_mds_epoch_.
  */
 nvwal_error_t flusher_update_mpe(struct NvwalContext* wal, nvwal_epoch_t new_mpe) {
   assert(nvwal_is_epoch_equal_or_after(
     new_mpe,
     wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
-  nvwal_atomic_store(&wal->nv_control_block_->flusher_progress_.paged_mds_epoch_, new_mpe);
+  /* No race in CB. Usual write */
+  wal->nv_control_block_->flusher_progress_.paged_mds_epoch_ = new_mpe;
 
-  if (msync(
+  /** But, it must be a durable write */
+  pmem_persist(
     &wal->nv_control_block_->flusher_progress_.paged_mds_epoch_,
-    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_),
-    MS_SYNC)) {
-    assert(errno);
-    return errno;
-  }
+    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
+
+  return 0;
+}
+/**
+ * Invoked from flusher_main_loop to durably bump up CB's durable_epoch_.
+ */
+nvwal_error_t flusher_update_de(struct NvwalContext* wal, nvwal_epoch_t new_de) {
+  assert(nvwal_is_epoch_equal_or_after(
+    new_de,
+    wal->nv_control_block_->flusher_progress_.durable_epoch_));
+  /* Same as above */
+  wal->nv_control_block_->flusher_progress_.durable_epoch_ = new_de;
+
+  pmem_persist(
+    &wal->nv_control_block_->flusher_progress_.durable_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.durable_epoch_));
 
   return 0;
 }
@@ -352,7 +367,13 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
       }
     }
 
-    nvwal_atomic_store(&wal->nv_control_block_->flusher_progress_.durable_epoch_, target_epoch);
+    /*
+     * We have two instances of durable_epoch_ to make the following safe
+     * Durably write to CB's durable_epoch_, then 'announce' it to other threads
+     * by writing to wal->durable_epoch_. No usual thread directly refer to
+     * CB's durable_epoch_.
+     */
+    NVWAL_CHECK_ERROR(flusher_update_de(wal, target_epoch));
     nvwal_atomic_store(&wal->durable_epoch_, target_epoch);
 
     wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
@@ -436,8 +457,8 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
       nvwal_atomic_store(&writer->oldest_frame_, wrap_writer_epoch_frame(frame_index + 1));
     } else {
       /** This frame might receive more logs. We just remember the new head */
-      /** Not atomic because only flusher reads/writes head.. except init */
-      frame->head_offset_ = new_head;
+      /** The store must be in order because nvwal_has_enough_writer_space() depends on it */
+      nvwal_atomic_store_release(&frame->head_offset_, new_head);
     }
 
     cur_segment->written_bytes_ += copied_bytes;
