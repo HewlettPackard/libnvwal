@@ -43,7 +43,8 @@ nvwal_error_t MdsTestContext::__init_internal(
   bool init_io, 
   bool init_bufmgr, 
   std::string unique_root_path, 
-  enum NvwalInitMode mode) 
+  enum NvwalInitMode mode,
+  struct NvwalControlBlock* cb) 
 {
   /* 
    * Record what components we initialized so that we properly uninitialize
@@ -106,6 +107,14 @@ nvwal_error_t MdsTestContext::__init_internal(
     config.mds_page_size_ = kNvwalMdsPageSize;
     memcpy(&wal->config_, &config, sizeof(config));
 
+    // allocate some pseudo nv control block as wal initialization would allocate it
+    wal->nv_control_block_ = new NvwalControlBlock;
+    if (cb) {
+      *wal->nv_control_block_ = *cb;
+    } else {
+      memset(wal->nv_control_block_, 0, sizeof(NvwalControlBlock));
+    }
+
     nvwal_error_t ret;
     if (init_io && init_bufmgr) {
       ret = mds_init(mode, wal);
@@ -146,6 +155,10 @@ nvwal_error_t MdsTestContext::__uninit_internal(bool uninit_io, bool uninit_bufm
       if (uninit_io) {
         ret = mds_io_uninit(wal);
       }
+    }
+    if (wal->nv_control_block_) {
+      delete wal->nv_control_block_;
+      wal->nv_control_block_ = NULL;
     }
     if (ret) {
       last_error = ret;

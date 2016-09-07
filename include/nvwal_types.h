@@ -698,6 +698,7 @@ struct NvwalMdsIoContext {
 struct NvwalMdsBuffer {
   struct NvwalMdsPageFile* file_;
   mds_page_no_t page_no_;
+  int dirty_;
   void* baseaddr_;
 };
 

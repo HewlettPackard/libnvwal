@@ -67,28 +67,28 @@ class MdsTestContext {
   /**
    * Complete initialization. Don't forget to check the return code!
    */
-  nvwal_error_t init_all(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate) {
-    return __init_internal(true, true, root_path, mode);
+  nvwal_error_t init_all(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate, struct NvwalControlBlock* cb = NULL) {
+    return __init_internal(true, true, root_path, mode, cb);
   }
 
   /**
    * Partial initialization: initialize I/O subsystem only.
    */
-  nvwal_error_t init_io(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate) {
-    return __init_internal(true, false, root_path, mode);
+  nvwal_error_t init_io(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate, struct NvwalControlBlock* cb = NULL) {
+    return __init_internal(true, false, root_path, mode, cb);
   }
 
   /**
    * Partial initialization: initialize buffer subsystem only.
    */
-  nvwal_error_t init_bufmgr(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate) {
-    return __init_internal(false, true, root_path, mode);
+  nvwal_error_t init_bufmgr(std::string root_path = "", enum NvwalInitMode mode = kNvwalInitCreateTruncate, struct NvwalControlBlock* cb = NULL) {
+    return __init_internal(false, true, root_path, mode, cb);
   }
 
   /**
    * Most initialization happens here. Don't forget to check the return code!
    */
-  nvwal_error_t __init_internal(bool init_io, bool init_bufmgr, std::string root_path, enum NvwalInitMode mode);
+  nvwal_error_t __init_internal(bool init_io, bool init_bufmgr, std::string root_path, enum NvwalInitMode mode, struct NvwalControlBlock* cb);
 
   nvwal_error_t uninit_all(bool remove_all = true) {
     return __uninit_internal(true, true, remove_all);
@@ -112,6 +112,8 @@ class MdsTestContext {
   MdsWalResource* get_resource(int wal_id) { return &wal_resources_[wal_id]; }
   NvwalContext* get_wal(int wal_id) { return &wal_resources_[wal_id].wal_instance_; }
   std::string get_root_path() { return unique_root_path_; }
+
+  struct NvwalControlBlock get_nv_control_block(int wal_id) { return *(get_wal(wal_id)->nv_control_block_); }
 
  private:
   MdsTestContext(const MdsTestContext&) = delete;
