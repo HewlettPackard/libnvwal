@@ -747,15 +747,11 @@ nvwal_error_t mds_bufmgr_alloc_page(
   nvwal_error_t ret;
   struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[file->file_no_];
 
-#if 0
-  if (buf->page_no_ == 0) {
-    /* Init buffer page number based on page file */
-    page_no_t num_pages;
-    NVWAL_CHECK_ERROR(mds_io_num_pages(file, &num_pages));
-    buf->file_ = file;
-    buf->page_no_ = num_pages+1;
-  }  
-#endif
+  if (buffer->page_no_ == 0) {
+    /* buffer is free: just use it */
+    buffer->file_ = file;
+    buffer->page_no_ = page_no;
+  } 
 
   if (page_no == buffer->page_no_) {
     /* do nothing: page is already allocated and buffered */
@@ -770,7 +766,6 @@ nvwal_error_t mds_bufmgr_alloc_page(
       *bufferp = buffer;
       ret = 0;
     } else {
-      printf("NOBUFS: %p %p\n", buffer, buffer->file_);
       ret = ENOBUFS;
     }
   } else {
@@ -803,7 +798,7 @@ nvwal_error_t mds_bufmgr_writeback(
   for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
     struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[i];
     if (buffer->dirty_) {
-      printf("%p %p %p\n", buffer, buffer->file_, buffer->baseaddr_);
+      //printf("%p %p %p\n", buffer, buffer->file_, buffer->baseaddr_);
       NVWAL_CHECK_ERROR(mds_io_append_page(buffer->file_, buffer->baseaddr_));
       buffer->dirty_ = 0;
     }
@@ -826,7 +821,7 @@ nvwal_error_t mds_bufmgr_writeback(
  * Therefore, to find the latest epoch we roll forward until we either 
  * detect a decrease in epoch number or a hole (invalid epoch).
  */
-static nvwal_epoch_t mds_latest_epoch_in_page(
+__attribute__((deprecate)) static nvwal_epoch_t mds_latest_epoch_in_page(
   struct NvwalMdsContext* mds,
   struct Page* page)
 {
@@ -844,6 +839,11 @@ static nvwal_epoch_t mds_latest_epoch_in_page(
   return latest_epoch;
 }
 
+static nvwal_epoch_t mds_durable_epoch(struct NvwalMdsContext* mds)
+{
+  struct NvwalContext* wal = mds->wal_;
+  return wal->nv_control_block_->flusher_progress_.durable_epoch_;
+}
 
 /**
  * @brief Performs recovery of the metadata store. 
@@ -875,7 +875,9 @@ static nvwal_error_t mds_recover(struct NvwalContext* wal)
     // TODO
 
     /* Roll forward to find latest epoch */
-    latest_epoch = mds_latest_epoch_in_page(mds, page);
+    latest_epoch = mds_durable_epoch(mds);
+    printf("DURABLE EPOCH: latest_epoch: %d\n" , latest_epoch);
+    //printf("LATEST EPOCH: latest_epoch: %d\n" , latest_epoch);
     if (latest_epoch > mds->latest_epoch_) {
       mds->latest_epoch_ = latest_epoch;
     }
