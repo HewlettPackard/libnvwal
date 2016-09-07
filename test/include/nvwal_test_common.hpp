@@ -87,7 +87,15 @@ class TestContext {
    * This is idempotent and the destructor automatically calls it.
    * Still, you should call this so that you can sanity-check the return value.
    */
-  nvwal_error_t uninit_all();
+  nvwal_error_t uninit_all() {
+    return impl_shutdown(true);
+  }
+
+  /**
+   * Restart testcase calls this to stop the instance and restart with
+   * durable logs.
+   */
+  nvwal_error_t restart_clean();
 
   int get_wal_count() const { return wal_count_; }
   WalResource* get_resource(int wal_id) { return &wal_resources_[wal_id]; }
@@ -96,6 +104,9 @@ class TestContext {
  private:
   TestContext(const TestContext&) = delete;
   TestContext& operator=(const TestContext&) = delete;
+
+  nvwal_error_t impl_startup(bool create_files);
+  nvwal_error_t impl_shutdown(bool remove_files);
 
   /**
    * Returns one randomly generated name in "%%%%_%%%%_%%%%_%%%%" format.

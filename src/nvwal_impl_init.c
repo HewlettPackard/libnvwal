@@ -485,7 +485,6 @@ nvwal_error_t impl_init_no_error_handling(
     /** TODO invoke MDS to do truncation */
   }
 
-  /** TODO we should retrieve from MDS in restart case */
   for (uint32_t i = 0; i < config->writer_count_; ++i) {
     struct NvwalWriterContext* writer = wal->writers_ + i;
     writer->parent_ = wal;

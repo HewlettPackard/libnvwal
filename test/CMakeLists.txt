@@ -96,6 +96,8 @@ add_nvwal_test_individual(test_nvwal_mds "Init;WriteEpochSingle;WriteEpochOneBat
 
 add_nvwal_test_individual(test_nvwal_mds_io "Init;AppendPage")
 
+add_nvwal_test_individual(test_nvwal_restart "NoLog;OneWriter;TwoWriters")
+
 add_nvwal_test_individual(test_nvwal_util "CircularMemcpy;CircularMemcpyWrap;ConcatSequenceFilename;IsNonemptyDir")
 
 add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs")
