@@ -36,6 +36,8 @@
 extern "C" {
 #endif  /* __cplusplus */
 
+struct MdsEpochIterator;
+struct MdsEpochMetadata;
 
 /**
  * @brief Initializes the metadata store.
@@ -133,6 +135,18 @@ int mds_epoch_iterator_done(struct MdsEpochIterator* iterator);
  * @param[in] iterator The iterator instance to destroy.
  */
 nvwal_error_t mds_epoch_iterator_destroy(struct MdsEpochIterator* iterator);
+
+/**
+ * @brief A convenience function to return a single epoch.
+ * @pre epoch_id != kNvwalInvalidEpoch
+ * @details
+ * Just a thin wrapper over epoch iterator.
+ * Not optimized for the performance, so use it where perforamnce is not an issue.
+ */
+nvwal_error_t mds_read_one_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t epoch_id,
+  struct MdsEpochMetadata* out);
 
 /**
  * @brief Truncates the metadata log so that the last epoch stored in the log 

@@ -1201,3 +1201,21 @@ nvwal_error_t mds_rollback_to_epoch(
 
   return 0;
 }
+
+nvwal_error_t mds_read_one_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t epoch_id,
+  struct MdsEpochMetadata* out) {
+  assert(epoch_id != kNvwalInvalidEpoch);
+  struct MdsEpochIterator mds_iterator;
+  NVWAL_CHECK_ERROR(mds_epoch_iterator_init(
+    wal,
+    epoch_id,
+    epoch_id,
+    &mds_iterator));
+  assert(!mds_epoch_iterator_done(&mds_iterator));
+  assert(mds_iterator.epoch_metadata_->epoch_id_  == epoch_id);
+  *out = *mds_iterator.epoch_metadata_;
+  NVWAL_CHECK_ERROR(mds_epoch_iterator_destroy(&mds_iterator));
+  return 0;
+}

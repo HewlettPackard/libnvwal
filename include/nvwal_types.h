@@ -856,7 +856,16 @@ struct NvwalContext {
   uint32_t segment_count_;
 
   /** Index into segment[] */
-  uint32_t cur_seg_idx_;
+  /* uint32_t cur_seg_idx_;*/
+  /**
+   * DSID (\b not array-index) of the NV segment the flusher is currently writing to.
+   * The current array-index in segments_ can be calculated via
+   *  (flusher_current_nv_segment_dsid_ - 1U) % segment_count.
+   * We store the accumulative DSID rather than array-index because we sometimes
+   * need to know how many cycles we went through.
+   * This variable is read/written only by flusher.
+   */
+  nvwal_dsid_t flusher_current_nv_segment_dsid_;
 
   /**
    * Where the flusher started writing logs in the currently-writing epoch,

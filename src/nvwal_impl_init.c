@@ -496,6 +496,22 @@ nvwal_error_t impl_init_no_error_handling(
   /* Initialize Metadata Store */
   NVWAL_CHECK_ERROR(mds_init(mode, wal));
 
+  /* Determine flusher's state as of the previous shutdown using MDS */
+  if (wal->durable_epoch_ == kNvwalInvalidEpoch) {
+    wal->flusher_current_nv_segment_dsid_ = 1U;
+    wal->flusher_current_epoch_head_dsid_ = 1U;
+    wal->flusher_current_epoch_head_offset_ = 0;
+  } else {
+    struct MdsEpochMetadata durable_epoch_meta;
+    NVWAL_CHECK_ERROR(mds_read_one_epoch(
+      wal,
+      wal->durable_epoch_,
+      &durable_epoch_meta));
+    wal->flusher_current_nv_segment_dsid_ = durable_epoch_meta.to_seg_id_;
+    wal->flusher_current_epoch_head_dsid_ = durable_epoch_meta.from_seg_id_;
+    wal->flusher_current_epoch_head_offset_ = durable_epoch_meta.from_offset_;
+  }
+
   /* Initialize the reader context */
   /* ret = reader_init(&wal->reader_); */
 
@@ -618,6 +634,11 @@ nvwal_error_t init_existing_nvram_segment(
   struct NvwalContext* wal,
   uint32_t nv_segment_index,
   struct NvwalLogSegment* segment) {
+  assert(!segment->fsync_completed_);
+  assert(!segment->fsync_error_);
+  assert(!segment->fsync_requested_);
+  assert(segment->nv_reader_pins_ == 0);
+  assert(segment->written_bytes_ == 0);
   segment->nv_segment_index_ = nv_segment_index;
   segment->parent_ = wal;
 
@@ -672,9 +693,11 @@ nvwal_error_t init_existing_nvram_segment(
   }
 
   assert(dsid > 0);
+  assert(dsid > ondisk_from);
   assert(((dsid - 1U) % wal->segment_count_) == nv_segment_index);
   segment->dsid_ = dsid;
-  /** TODO */
+  assert(segment->nv_segment_index_ == 0);
+  /** Recover the state of this segment */
   if (dsid == ondisk_from) {
     /** This is the segment we were writing to as of prev. shutdown */
     if (wal->durable_epoch_ != kNvwalInvalidEpoch) {
@@ -691,6 +714,26 @@ nvwal_error_t init_existing_nvram_segment(
       NVWAL_CHECK_ERROR(mds_epoch_iterator_destroy(&mds_iterator));
     }
   } else {
+    /*
+     * This segment is not yet synced to disc, and not the one we were writing.
+     */
+    if (segment->dsid_ > wal->flusher_current_nv_segment_dsid_) {
+      /* The segment was not used/recycled yet. */
+    } else if (segment->dsid_ == wal->flusher_current_nv_segment_dsid_) {
+      /* The segment was partially filled by flusher */
+      struct MdsEpochMetadata durable_epoch_meta;
+      NVWAL_CHECK_ERROR(mds_read_one_epoch(
+        wal,
+        wal->durable_epoch_,
+        &durable_epoch_meta));
+      assert(wal->flusher_current_nv_segment_dsid_ == durable_epoch_meta.to_seg_id_);
+      segment->written_bytes_ = durable_epoch_meta.to_off_;
+      assert(segment->written_bytes_ <= wal->config_.segment_size_);
+    } else {
+      /* The segment was fully filled by flusher and waiting for fsyncer */
+      segment->fsync_requested_ = 1U;
+      segment->written_bytes_ = wal->config_.segment_size_;
+    }
   }
 
   return 0;

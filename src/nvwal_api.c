@@ -203,6 +203,19 @@ uint8_t nvwal_has_enough_writer_space(
  *
  ***************************************************************************/
 
+struct NvwalLogSegment* flusher_get_segment_from_dsid(
+  struct NvwalContext* wal,
+  nvwal_dsid_t dsid) {
+  assert(dsid);
+  uint32_t index = (dsid - 1U) % wal->segment_count_;
+  return wal->segments_ + index;
+}
+
+struct NvwalLogSegment* flusher_get_cur_segment(
+  struct NvwalContext* wal) {
+  return flusher_get_segment_from_dsid(wal, wal->flusher_current_nv_segment_dsid_);
+}
+
 /**
  * Fsluher calls this to copy one writer's private buffer to NV-segment.
  * This method does not drain or fsync because we expect that
@@ -307,7 +320,7 @@ nvwal_error_t flusher_conclude_stable_epoch(
   new_meta.epoch_id_ = target_epoch;
   new_meta.from_seg_id_ = wal->flusher_current_epoch_head_dsid_;
   new_meta.from_offset_ = wal->flusher_current_epoch_head_offset_;
-  const struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
+  const struct NvwalLogSegment* cur_segment = flusher_get_cur_segment(wal);
   new_meta.to_seg_id_ = cur_segment->dsid_;
   new_meta.to_off_ = cur_segment->written_bytes_;
 
@@ -387,13 +400,6 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
     = nvwal_increment_epoch(wal->durable_epoch_);
   const uint8_t is_stable_epoch = (target_epoch == wal->stable_epoch_);
 
-  if (wal->flusher_current_epoch_head_dsid_ == 0) {
-    const struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
-    wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
-    assert(wal->flusher_current_epoch_head_dsid_);
-    wal->flusher_current_epoch_head_offset_ = cur_segment->written_bytes_;
-  }
-
   /*
    * We don't make things durable for each writer-traversal.
    * We rather do it after taking a look at all workers.
@@ -461,8 +467,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
   const uint64_t segment_size = wal->config_.segment_size_;
   const uint64_t writer_buffer_size = wal->config_.writer_buffer_size_;
   while (1) {  /** Until we write out all logs in this frame */
-    const uint32_t segment_index = wal->cur_seg_idx_;
-    struct NvwalLogSegment* cur_segment = wal->segments_ + segment_index;
+    struct NvwalLogSegment* cur_segment = flusher_get_cur_segment(wal);
     assert(cur_segment->nv_baseaddr_);
 
     /** We read the markers, then the data. Must prohibit reordering */
@@ -508,7 +513,6 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
       if (error_code) {
         return error_code;
       }
-      assert(segment_index != wal->cur_seg_idx_);
       continue;
     } else if (copied_bytes == distance) {
       break;
@@ -521,8 +525,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
 
 nvwal_error_t flusher_move_onto_next_nv_segment(
   struct NvwalContext* wal) {
-  struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
-  assert(cur_segment->nv_segment_index_ == wal->cur_seg_idx_);
+  struct NvwalLogSegment* cur_segment = flusher_get_cur_segment(wal);
   assert(cur_segment->dsid_ > 0);
   assert((cur_segment->dsid_ - 1U) % wal->segment_count_
     == cur_segment->nv_segment_index_);
@@ -533,18 +536,15 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
 
   nvwal_atomic_store(&cur_segment->fsync_requested_, 1U);  /** Signal to fsyncer */
 
-  uint32_t new_index = wal->cur_seg_idx_ + 1;
-  if (new_index == wal->config_.segment_size_) {
-    new_index = 0;
-  }
-
   /**
    * Now, we need to recycle this segment. this might involve a wait if
    * we haven't copied it to disk, or epoch-cursor is now reading from this segment.
    */
-  struct NvwalLogSegment* new_segment = wal->segments_ + new_index;
+  const nvwal_dsid_t next_dsid = wal->flusher_current_nv_segment_dsid_ + 1U;
+  struct NvwalLogSegment* new_segment = flusher_get_segment_from_dsid(wal, next_dsid);
   while (!nvwal_atomic_load_acquire(&new_segment->fsync_completed_)) {
     /** Should be rare! not yet copied to disk */
+    assert(new_segment->fsync_requested_);
     sched_yield();
     nvwal_error_t fsync_error = nvwal_atomic_load_acquire(&new_segment->fsync_error_);
     if (fsync_error) {
@@ -569,8 +569,9 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
 
   /** Ok, let's recycle */
   assert(new_segment->dsid_ > 0);
-  assert((new_segment->dsid_ - 1U) % wal->segment_count_ == new_index);
-  new_segment->dsid_ += wal->segment_count_;
+  assert((new_segment->dsid_ - 1U) % wal->segment_count_
+    == (next_dsid - 1U) % wal->segment_count_);
+  new_segment->dsid_ = next_dsid;
   new_segment->written_bytes_ = 0;
   new_segment->fsync_completed_ = 0;
   new_segment->fsync_error_ = 0;
@@ -580,7 +581,7 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   nvwal_atomic_store(&new_segment->nv_reader_pins_, 0);
 
   /** No need to be atomic. only flusher reads/writes it */
-  wal->cur_seg_idx_ = new_index;
+  wal->flusher_current_nv_segment_dsid_ = next_dsid;
   return 0;
 }
 
