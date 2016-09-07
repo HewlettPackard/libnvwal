@@ -607,27 +607,39 @@ struct NvwalWriterContext {
  */
 struct NvwalLogSegment {
   /** Back pointer to the parent WAL context. */
-  struct NvwalContext* parent_;
+  struct NvwalContext* parent_;   /* +8 -> 8 */
 
   /**
    * mmap-ed virtual address for this segment on NVDIMM.
    * Both MAP_FAILED and NULL mean an invalid VA.
    * When it is a valid VA, libnvwal is responsible to unmap it during uninit.
    */
-  nvwal_byte_t* nv_baseaddr_;
+  nvwal_byte_t* nv_baseaddr_;   /* +8 -> 16 */
 
   /**
    * ID of the disk-resident segment.
    * This is bumped up without race when the segment object is recycled for next use.
    */
-  nvwal_dsid_t dsid_;
+  nvwal_dsid_t dsid_;   /* +8 -> 24 */
 
   /**
    * Index of this segment in NVDIMM.
    * This is immutable once initialized.
    * @invariant this == parent_->segments_ + nv_segment_index_
    */
-  uint32_t nv_segment_index_;
+  uint32_t nv_segment_index_;   /* +4 -> 28 */
+
+  /**
+   * Number of pinning done by readers that are currently reading
+   * from this NV-segment. While this is not zero, we must not
+   * recycle this segment.
+   * Value -1 is reserved for "being recycled".
+   * When we recycle this segment, we CAS this from 0 to -1.
+   * Readers pin it by CAS-ing from a non-negative value to the value +1.
+   * Unfortunately not a simple fetch_add, but should be rare to have
+   * a contention here.
+   */
+  int32_t nv_reader_pins_;   /* +4 -> 32 */
 
   /**
    * When this segment is populated and ready for copying to disk,
@@ -635,37 +647,42 @@ struct NvwalLogSegment {
    * fsyncher does nothing while this variable is 0.
    * Resets to 0 without race when the segment object is recycled for next use.
    */
-  uint8_t fsync_requested_;
+  uint8_t fsync_requested_;   /* +1 -> 33 */
 
   /**
    * When this segment is durably copied to disk,
    * the fsyncer sets this variable to notify flusher.
    * Resets to 0 without race when the segment object is recycled for next use.
    */
-  uint8_t fsync_completed_;
+  uint8_t fsync_completed_;   /* +1 -> 34 */
+
+  uint16_t pad1_;             /* +2 -> 36 */
 
   /**
    * If fsyncer had any error while copying this segment to disk, the error code.
    */
-  nvwal_error_t fsync_error_;
+  nvwal_error_t fsync_error_;  /* +4 -> 40 */
 
   /**
    * Number of bytes we copied so far. Read/Written only by flusher.
    * Starts with zero and resets to zero when we recycle this segment.
    */
-  uint64_t written_bytes_;
+  uint64_t written_bytes_;    /* +8 -> 48 */
 
   /**
    * File descriptor on NVDIMM.
    * Both -1 and 0 mean an invalid descriptor.
    * When it is a valid FD, libnvwal is responsible to close it during uninit.
    */
-  int64_t nv_fd_;
+  int64_t nv_fd_;             /* +8 -> 56 */
   /*
   we don't retain FD on disk. it's a local variable opened/used, then immediately
   closed by the fsyncer. simpler!
   int64_t disk_fd_;
   */
+
+  /** Each LogSegment should occupy its own cacheline (64b) */
+  int64_t pad2_;              /* +8 -> 64 */
 };
 
 /**  

@@ -330,7 +330,7 @@ nvwal_error_t open_control_file(
   }
 
   /** Take the image of previous config as of this point. */
-  pmem_memcpy_persist(
+  memcpy(
     &wal->prev_config_,
     &wal->nv_control_block_->config_,
     sizeof(struct NvwalConfig));
@@ -754,6 +754,8 @@ nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
     }
   }
   segment->nv_fd_ = 0;
+
+  assert(segment->nv_reader_pins_ == 0);
 
   memset(segment, 0, sizeof(struct NvwalLogSegment));
 

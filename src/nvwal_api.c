@@ -553,7 +553,19 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
     }
   }
 
-  /** TODO check if any epoch-cursor is now reading from this */
+  /** Wait while any epoch-cursor is now reading from this */
+  while (1) {
+    int32_t expected = 0;
+    if (nvwal_atomic_compare_exchange_weak(
+      &new_segment->nv_reader_pins_,
+      &expected,
+      -1)) {
+      assert(expected == 0);
+      break;
+    }
+    assert(expected > 0);
+    sched_yield();
+  }
 
   /** Ok, let's recycle */
   assert(new_segment->dsid_ > 0);
@@ -563,6 +575,9 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   new_segment->fsync_completed_ = 0;
   new_segment->fsync_error_ = 0;
   new_segment->fsync_requested_ = 0;
+
+  assert(new_segment->nv_reader_pins_ == -1);
+  nvwal_atomic_store(&new_segment->nv_reader_pins_, 0);
 
   /** No need to be atomic. only flusher reads/writes it */
   wal->cur_seg_idx_ = new_index;
