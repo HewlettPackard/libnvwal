@@ -56,6 +56,25 @@ nvwal_error_t nvwal_query_durable_epoch(
   return 0;
 }
 
+nvwal_error_t nvwal_advance_stable_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t new_stable_epoch) {
+  const nvwal_epoch_t durable_epoch = nvwal_atomic_load_acquire(&wal->durable_epoch_);
+  if (nvwal_increment_epoch(durable_epoch) != new_stable_epoch) {
+    return 0;
+  }
+
+  nvwal_epoch_t expected = durable_epoch;
+  nvwal_atomic_compare_exchange_strong(
+    &wal->stable_epoch_,
+    &expected,
+    new_stable_epoch);
+
+  assert(nvwal_is_epoch_equal_or_after(wal->stable_epoch_, new_stable_epoch));
+  return 0;
+}
+
+
 uint64_t nvwal_get_version() {
   enum NvwalVersionNumber {
     /**

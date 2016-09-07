@@ -18,8 +18,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
+#include "nvwal_api.h"
 #include "nvwal_test_common.hpp"
 
 /**
@@ -32,7 +34,50 @@ namespace nvwaltest {
 TEST(NvwalRestartTest, NoLog) {
   TestContext context(1);
   EXPECT_EQ(0, context.init_all());
+
+  auto* resource = context.get_resource(0);
+  auto* wal = &resource->wal_instance_;
+  nvwal_epoch_t durable_epoch;
+  EXPECT_EQ(0, nvwal_query_durable_epoch(wal, &durable_epoch));
+  EXPECT_EQ(kNvwalInvalidEpoch, durable_epoch);
+
   EXPECT_EQ(0, context.restart_clean());
+
+  resource = context.get_resource(0);
+  wal = &resource->wal_instance_;
+  EXPECT_EQ(0, nvwal_query_durable_epoch(wal, &durable_epoch));
+  EXPECT_EQ(kNvwalInvalidEpoch, durable_epoch);
+
+  EXPECT_EQ(0, context.uninit_all());
+}
+TEST(NvwalRestartTest, OneWriterOneEpoch) {
+  TestContext context(1);
+  EXPECT_EQ(0, context.init_all());
+
+  auto* resource = context.get_resource(0);
+  auto* wal = &resource->wal_instance_;
+  auto* buffer = resource->writer_buffers_[0].get();
+  auto* writer = resource->wal_instance_.writers_ + 0;
+  const uint32_t kBytes = 64;
+
+  std::memset(buffer, 42, kBytes);
+  EXPECT_EQ(1U, nvwal_has_enough_writer_space(writer));
+  EXPECT_EQ(0, nvwal_on_wal_write(writer, kBytes, 1));
+
+  EXPECT_EQ(0, nvwal_advance_stable_epoch(wal, 1U));
+  EXPECT_EQ(0, TestContext::wait_until_durable(wal, 1U));
+
+  nvwal_epoch_t durable_epoch;
+  EXPECT_EQ(0, nvwal_query_durable_epoch(wal, &durable_epoch));
+  EXPECT_EQ(1U, durable_epoch);
+
+  EXPECT_EQ(0, context.restart_clean());
+
+  resource = context.get_resource(0);
+  wal = &resource->wal_instance_;
+  EXPECT_EQ(0, nvwal_query_durable_epoch(wal, &durable_epoch));
+  EXPECT_EQ(1U, durable_epoch);
+
   EXPECT_EQ(0, context.uninit_all());
 }
 

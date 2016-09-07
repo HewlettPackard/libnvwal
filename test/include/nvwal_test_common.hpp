@@ -97,6 +97,16 @@ class TestContext {
    */
   nvwal_error_t restart_clean();
 
+  /**
+   * A convenience function to wait until the given epoch becomes durable.
+   * Of course you must invoke nvwal_advance_stable_epoch() beforehand!!
+   * This method doesn't care about performance.
+   * It sleeps with some interval to minimize wasted CPU.
+   */
+  static nvwal_error_t wait_until_durable(
+    NvwalContext* wal,
+    nvwal_epoch_t expected_durable_epoch);
+
   int get_wal_count() const { return wal_count_; }
   WalResource* get_resource(int wal_id) { return &wal_resources_[wal_id]; }
   NvwalContext* get_wal(int wal_id) { return &wal_resources_[wal_id].wal_instance_; }

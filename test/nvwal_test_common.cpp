@@ -24,11 +24,13 @@
 #include <unistd.h>
 #include <valgrind.h>
 
+#include <chrono>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <boost/filesystem.hpp>
 
@@ -146,6 +148,24 @@ nvwal_error_t TestContext::restart_clean() {
 
   return impl_startup(false);
 }
+
+nvwal_error_t TestContext::wait_until_durable(
+  NvwalContext* wal,
+  nvwal_epoch_t expected_durable_epoch) {
+  while (true) {
+    nvwal_epoch_t out;
+    nvwal_error_t ret = nvwal_query_durable_epoch(wal, &out);
+    if (ret) {
+      return ret;
+    } else if (nvwal_is_epoch_equal_or_after(out, expected_durable_epoch)) {
+      break;
+    }
+    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return 0;
+}
+
 
 
 void WalResource::launch_flusher() {
