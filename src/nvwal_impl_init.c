@@ -697,43 +697,22 @@ nvwal_error_t init_existing_nvram_segment(
   assert(((dsid - 1U) % wal->segment_count_) == nv_segment_index);
   segment->dsid_ = dsid;
   assert(segment->nv_segment_index_ == 0);
-  /** Recover the state of this segment */
-  if (dsid == ondisk_from) {
-    /** This is the segment we were writing to as of prev. shutdown */
-    if (wal->durable_epoch_ != kNvwalInvalidEpoch) {
-      assert(mds_latest_epoch(wal) == wal->durable_epoch_);
-      struct MdsEpochIterator mds_iterator;
-      NVWAL_CHECK_ERROR(mds_epoch_iterator_init(
-        wal,
-        wal->durable_epoch_,
-        wal->durable_epoch_,
-        &mds_iterator));
-      assert(!mds_epoch_iterator_done(&mds_iterator));
-      assert(mds_iterator.epoch_metadata_->epoch_id_  == wal->durable_epoch_);
-      /* mds_iterator.epoch_metadata_->to_seg_id_; */
-      NVWAL_CHECK_ERROR(mds_epoch_iterator_destroy(&mds_iterator));
-    }
+  if (segment->dsid_ > wal->flusher_current_nv_segment_dsid_) {
+    /* The segment was not used/recycled yet. Nothing to do then */
+  } else if (segment->dsid_ == wal->flusher_current_nv_segment_dsid_) {
+    /* The segment was partially filled by flusher */
+    struct MdsEpochMetadata durable_epoch_meta;
+    NVWAL_CHECK_ERROR(mds_read_one_epoch(
+      wal,
+      wal->durable_epoch_,
+      &durable_epoch_meta));
+    assert(wal->flusher_current_nv_segment_dsid_ == durable_epoch_meta.to_seg_id_);
+    segment->written_bytes_ = durable_epoch_meta.to_off_;
+    assert(segment->written_bytes_ <= wal->config_.segment_size_);
   } else {
-    /*
-     * This segment is not yet synced to disc, and not the one we were writing.
-     */
-    if (segment->dsid_ > wal->flusher_current_nv_segment_dsid_) {
-      /* The segment was not used/recycled yet. */
-    } else if (segment->dsid_ == wal->flusher_current_nv_segment_dsid_) {
-      /* The segment was partially filled by flusher */
-      struct MdsEpochMetadata durable_epoch_meta;
-      NVWAL_CHECK_ERROR(mds_read_one_epoch(
-        wal,
-        wal->durable_epoch_,
-        &durable_epoch_meta));
-      assert(wal->flusher_current_nv_segment_dsid_ == durable_epoch_meta.to_seg_id_);
-      segment->written_bytes_ = durable_epoch_meta.to_off_;
-      assert(segment->written_bytes_ <= wal->config_.segment_size_);
-    } else {
-      /* The segment was fully filled by flusher and waiting for fsyncer */
-      segment->fsync_requested_ = 1U;
-      segment->written_bytes_ = wal->config_.segment_size_;
-    }
+    /* The segment was fully filled by flusher and waiting for fsyncer */
+    segment->fsync_requested_ = 1U;
+    segment->written_bytes_ = wal->config_.segment_size_;
   }
 
   return 0;
