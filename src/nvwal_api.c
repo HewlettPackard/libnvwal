@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libpmem.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -262,21 +263,111 @@ nvwal_error_t nvwal_flusher_main(
 }
 
 /**
- * Invoked from flusher_main_loop to durably bump up paged_mds_epoch_.
+ * Invoked from flusher_conclude_stable_epoch to durably bump up CB's paged_mds_epoch_.
  */
 nvwal_error_t flusher_update_mpe(struct NvwalContext* wal, nvwal_epoch_t new_mpe) {
   assert(nvwal_is_epoch_equal_or_after(
     new_mpe,
     wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
-  nvwal_atomic_store(&wal->nv_control_block_->flusher_progress_.paged_mds_epoch_, new_mpe);
+  /* No race in CB. Usual write */
+  wal->nv_control_block_->flusher_progress_.paged_mds_epoch_ = new_mpe;
 
-  if (msync(
+  /** But, it must be a durable write */
+  pmem_persist(
     &wal->nv_control_block_->flusher_progress_.paged_mds_epoch_,
-    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_),
-    MS_SYNC)) {
-    assert(errno);
-    return errno;
+    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
+
+  return 0;
+}
+/**
+ * Invoked from flusher_conclude_stable_epoch to durably bump up CB's durable_epoch_.
+ */
+nvwal_error_t flusher_update_de(struct NvwalContext* wal, nvwal_epoch_t new_de) {
+  assert(nvwal_is_epoch_equal_or_after(
+    new_de,
+    wal->nv_control_block_->flusher_progress_.durable_epoch_));
+  /* Same as above */
+  wal->nv_control_block_->flusher_progress_.durable_epoch_ = new_de;
+
+  pmem_persist(
+    &wal->nv_control_block_->flusher_progress_.durable_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.durable_epoch_));
+
+  return 0;
+}
+
+/**
+ * Invoked from flusher_main_loop to advance durable_epoch to stable_epoch.
+ */
+nvwal_error_t flusher_conclude_stable_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t target_epoch) {
+  /* We wrote out all logs in this epoch! Now we can bump up DE */
+  struct MdsEpochMetadata new_meta;
+  new_meta.epoch_id_ = target_epoch;
+  new_meta.from_seg_id_ = wal->flusher_current_epoch_head_dsid_;
+  new_meta.from_offset_ = wal->flusher_current_epoch_head_offset_;
+  const struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
+  new_meta.to_seg_id_ = cur_segment->dsid_;
+  new_meta.to_off_ = cur_segment->written_bytes_;
+
+  /*
+   * Individual copies to NV-segments were just usual memcpy without drain/persist.
+   * Rather than we invoke persist for individual copies, we persist all writes
+   * in this epoch here. This dramatically reduces the number of persist calls.
+   */
+  nvwal_dsid_t disk_dsid = wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_;
+  for (nvwal_dsid_t dsid = new_meta.from_seg_id_;
+       dsid <= new_meta.to_seg_id_;
+      ++dsid) {
+    if (dsid <= disk_dsid) {
+      /* If it's already on disk, definitely persisted. */
+      continue;
+    }
+    uint64_t from_offset = 0;
+    if (dsid == new_meta.from_seg_id_) {
+      from_offset = new_meta.from_offset_;
+    }
+    uint64_t to_offset = wal->config_.segment_size_;
+    if (dsid == new_meta.to_seg_id_) {
+      to_offset = new_meta.to_off_;
+    }
+    assert(from_offset <= to_offset);
+    uint32_t segment_index = (dsid - 1U) % wal->segment_count_;
+    assert(wal->segments_[segment_index].dsid_ == dsid);
+    pmem_persist(
+      wal->segments_[segment_index].nv_baseaddr_ + from_offset,
+      to_offset - from_offset);
   }
+
+  const nvwal_error_t mds_ret = mds_write_epoch(wal, &new_meta);
+  if (mds_ret) {
+    if (mds_ret == ENOBUFS) {
+      /* This is an expected error saying that we should trigger paging */
+      const nvwal_epoch_t new_paged_epoch = wal->durable_epoch_;
+      /* TODO NVWAL_CHECK_ERROR(mds_evict_page(wal, new_paged_epoch)); */
+
+      /* Also durably record that we paged MDS */
+      NVWAL_CHECK_ERROR(flusher_update_mpe(wal, new_paged_epoch));
+
+      /* Then try again. This time it should succeed */
+      NVWAL_CHECK_ERROR(mds_write_epoch(wal, &new_meta));
+    } else {
+      return mds_ret;
+    }
+  }
+
+  /*
+    * We have two instances of durable_epoch_ to make the following safe
+    * Durably write to CB's durable_epoch_, then 'announce' it to other threads
+    * by writing to wal->durable_epoch_. No usual thread directly refer to
+    * CB's durable_epoch_.
+    */
+  NVWAL_CHECK_ERROR(flusher_update_de(wal, target_epoch));
+  nvwal_atomic_store(&wal->durable_epoch_, target_epoch);
+
+  wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
+  wal->flusher_current_epoch_head_offset_ = cur_segment->written_bytes_;
 
   return 0;
 }
@@ -326,37 +417,7 @@ nvwal_error_t flusher_main_loop(struct NvwalContext* wal) {
   }
 
   if (is_stable_epoch && target_epoch != wal->durable_epoch_) {
-    /* We wrote out all logs in this epoch! Now we can bump up DE */
-    struct MdsEpochMetadata new_meta;
-    new_meta.epoch_id_ = target_epoch;
-    new_meta.from_seg_id_ = wal->flusher_current_epoch_head_dsid_;
-    new_meta.from_offset_ = wal->flusher_current_epoch_head_offset_;
-    const struct NvwalLogSegment* cur_segment = wal->segments_ + wal->cur_seg_idx_;
-    new_meta.to_seg_id_ = cur_segment->dsid_;
-    new_meta.to_off_ = cur_segment->written_bytes_;
-
-    const nvwal_error_t mds_ret = mds_write_epoch(wal, &new_meta);
-    if (mds_ret) {
-      if (mds_ret == ENOBUFS) {
-        /* This is an expected error saying that we should trigger paging */
-        const nvwal_epoch_t new_paged_epoch = wal->durable_epoch_;
-        /* TODO NVWAL_CHECK_ERROR(mds_evict_page(wal, new_paged_epoch)); */
-
-        /* Also durably record that we paged MDS */
-        NVWAL_CHECK_ERROR(flusher_update_mpe(wal, new_paged_epoch));
-
-        /* Then try again. This time it should succeed */
-        NVWAL_CHECK_ERROR(mds_write_epoch(wal, &new_meta));
-      } else {
-        return mds_ret;
-      }
-    }
-
-    nvwal_atomic_store(&wal->nv_control_block_->flusher_progress_.durable_epoch_, target_epoch);
-    nvwal_atomic_store(&wal->durable_epoch_, target_epoch);
-
-    wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
-    wal->flusher_current_epoch_head_offset_ = cur_segment->written_bytes_;
+    NVWAL_CHECK_ERROR(flusher_conclude_stable_epoch(wal, target_epoch));
   }
 
   return 0;
@@ -436,8 +497,8 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
       nvwal_atomic_store(&writer->oldest_frame_, wrap_writer_epoch_frame(frame_index + 1));
     } else {
       /** This frame might receive more logs. We just remember the new head */
-      /** Not atomic because only flusher reads/writes head.. except init */
-      frame->head_offset_ = new_head;
+      /** The store must be in order because nvwal_has_enough_writer_space() depends on it */
+      nvwal_atomic_store_release(&frame->head_offset_, new_head);
     }
 
     cur_segment->written_bytes_ += copied_bytes;
@@ -492,7 +553,19 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
     }
   }
 
-  /** TODO check if any epoch-cursor is now reading from this */
+  /** Wait while any epoch-cursor is now reading from this */
+  while (1) {
+    int32_t expected = 0;
+    if (nvwal_atomic_compare_exchange_weak(
+      &new_segment->nv_reader_pins_,
+      &expected,
+      -1)) {
+      assert(expected == 0);
+      break;
+    }
+    assert(expected > 0);
+    sched_yield();
+  }
 
   /** Ok, let's recycle */
   assert(new_segment->dsid_ > 0);
@@ -502,6 +575,9 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   new_segment->fsync_completed_ = 0;
   new_segment->fsync_error_ = 0;
   new_segment->fsync_requested_ = 0;
+
+  assert(new_segment->nv_reader_pins_ == -1);
+  nvwal_atomic_store(&new_segment->nv_reader_pins_, 0);
 
   /** No need to be atomic. only flusher reads/writes it */
   wal->cur_seg_idx_ = new_index;
@@ -570,24 +646,19 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
 
 nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
-  nvwal_error_t ret;
-  int disk_fd;
-  char disk_path[kNvwalMaxPathLength];
-  uint64_t total_writen, written;
-
   assert(segment->dsid_);
   assert(!segment->fsync_completed_);
-  ret = 0;
-  disk_fd = 0;
-  total_writen = 0;
-  written = 0;
+  nvwal_error_t ret = 0;
+  uint64_t total_writen = 0;
+  uint64_t written = 0;
   segment->fsync_error_ = 0;
+  char disk_path[kNvwalMaxPathLength];
   nvwal_construct_disk_segment_path(
     segment->parent_,
     segment->dsid_,
     disk_path);
 
-  disk_fd = nvwal_open_best_effort_o_direct(
+  int disk_fd = nvwal_open_best_effort_o_direct(
     disk_path,
     O_CREAT | O_RDWR,
     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
@@ -624,6 +695,15 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
   nvwal_open_and_fsync(segment->parent_->config_.disk_root_);
 
   nvwal_atomic_store(&(segment->fsync_completed_), 1U);
+
+  /* Durably bump up CB's progress info */
+  assert(segment->dsid_
+    > segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
+  segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_ = segment->dsid_;
+  pmem_persist(
+    &segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_,
+    sizeof(segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_));
+
   return 0;
 
 error_return:

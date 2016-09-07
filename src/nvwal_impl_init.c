@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libpmem.h>
 #include <sched.h>
 #include <string.h>
 #include <unistd.h>
@@ -325,12 +326,14 @@ nvwal_error_t open_control_file(
   }
 
   if (original_filesize != sizeof(struct NvwalControlBlock)) {
-    memset(wal->nv_control_block_, 0, sizeof(struct NvwalControlBlock));
-    msync(wal->nv_control_block_, sizeof(struct NvwalControlBlock), MS_SYNC);
+    pmem_memset_persist(wal->nv_control_block_, 0, sizeof(struct NvwalControlBlock));
   }
 
   /** Take the image of previous config as of this point. */
-  memcpy(&wal->prev_config_, &wal->nv_control_block_->config_, sizeof(struct NvwalConfig));
+  memcpy(
+    &wal->prev_config_,
+    &wal->nv_control_block_->config_,
+    sizeof(struct NvwalConfig));
 
   return 0;
 }
@@ -598,8 +601,7 @@ nvwal_error_t init_fresh_nvram_segment(
    * Even with fallocate we don't trust the metadata to be stable
    * enough for userspace durability. Actually write some bytes!
    */
-  memset(segment->nv_baseaddr_, 0, wal->config_.segment_size_);
-  msync(segment->nv_baseaddr_, wal->config_.segment_size_, MS_SYNC);
+  pmem_memset_persist(segment->nv_baseaddr_, 0, wal->config_.segment_size_);
 
   /** To speed up start up, we don't do fsync here.
   We rather do syncfs at the end.
@@ -752,6 +754,8 @@ nvwal_error_t uninit_log_segment(struct NvwalLogSegment* segment) {
     }
   }
   segment->nv_fd_ = 0;
+
+  assert(segment->nv_reader_pins_ == 0);
 
   memset(segment, 0, sizeof(struct NvwalLogSegment));
 
