@@ -738,15 +738,16 @@ static inline struct Page* mds_bufmgr_page(struct NvwalMdsBuffer* buffer)
  * page file.
  *
  */
-nvwal_error_t mds_bufmgr_buffer_page(
+nvwal_error_t mds_bufmgr_alloc_page(
   struct NvwalMdsBufferManagerContext* bufmgr, 
   struct NvwalMdsPageFile* file, 
   page_no_t page_no, 
-  struct NvwalMdsBuffer** buffer) 
+  struct NvwalMdsBuffer** bufferp) 
 {
   nvwal_error_t ret;
-  struct NvwalMdsBuffer* buf = &bufmgr->write_buffers_[file->file_no_];
+  struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[file->file_no_];
 
+#if 0
   if (buf->page_no_ == 0) {
     /* Init buffer page number based on page file */
     page_no_t num_pages;
@@ -754,18 +755,25 @@ nvwal_error_t mds_bufmgr_buffer_page(
     buf->file_ = file;
     buf->page_no_ = num_pages+1;
   }  
+#endif
 
-  if (page_no == buf->page_no_) {
+  if (page_no == buffer->page_no_) {
     /* do nothing: page is already allocated and buffered */
-    *buffer = buf;
+    buffer->dirty_ = 1;
+    *bufferp = buffer;
     ret = 0;
-  } else if (page_no == buf->page_no_+1) {
-    ret = mds_io_append_page(file, buf->baseaddr_);
-    nvwal_atomic_store(&buf->page_no_, page_no);
-    *buffer = buf;
-    ret = 0;
+  } else if (page_no == buffer->page_no_+1) {
+    /* we can recycle buffer only if clean */
+    if (buffer->dirty_ == 0) {
+      nvwal_atomic_store(&buffer->page_no_, page_no);
+      buffer->dirty_ = 1;
+      *bufferp = buffer;
+      ret = 0;
+    } else {
+      printf("NOBUFS: %p %p\n", buffer, buffer->file_);
+      ret = ENOBUFS;
+    }
   } else {
-    //if (page_no < {
 #if 0
   nvwal_error_t ret;
   struct NvwalMdsContext* mds = &(wal->mds_);
@@ -786,35 +794,28 @@ nvwal_error_t mds_bufmgr_buffer_page(
   return ret;
 }
 
+/**
+ * @brief Write backs dirty and completely filled up bufferred pages.
+ */
+nvwal_error_t mds_bufmgr_writeback(
+  struct NvwalMdsBufferManagerContext* bufmgr)
+{
+  for (int i=0; i<kNvwalMdsMaxPagefiles; i++) {
+    struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[i];
+    if (buffer->dirty_) {
+      printf("%p %p %p\n", buffer, buffer->file_, buffer->baseaddr_);
+      NVWAL_CHECK_ERROR(mds_io_append_page(buffer->file_, buffer->baseaddr_));
+      buffer->dirty_ = 0;
+    }
+  }
+  return 0;
+}
 
 
 /******************************************************************************
  * Meta-data store core methods
  *****************************************************************************/
 
-/** 
- * DEPRECATED
- * 
- * @details
- * Epochs increase monotonically and we always write epochs in sequential order. 
- * Thus, we can infer the page number of the page by looking at the first epoch 
- * record.
- */   
-__attribute__ ((deprecated)) static page_no_t mds_page_no(
-  struct NvwalMdsContext* mds, 
-  struct Page* page)
-{
-  page_no_t page_no;
-  nvwal_epoch_t epoch_id = page->epochs_[0].epoch_id_;
-
-  if (epoch_id == kNvwalInvalidEpoch) {
-    page_no = 0; /* invalid page number */
-  } else {
-    page_no = epoch_id_to_page_no(mds, epoch_id);
-  }
-
-  return page_no;
-}
 
 /*
  * @brief Returns latest epoch in page.
@@ -1102,23 +1103,20 @@ nvwal_error_t mds_write_epoch(
   struct NvwalContext* wal, 
   struct MdsEpochMetadata* epoch_metadata)
 {
-  struct NvwalMdsContext* mds = &(wal->mds_);
-  nvwal_error_t ret;
   struct NvwalMdsBuffer* buffer;
-
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
   nvwal_epoch_t epoch_id = epoch_metadata->epoch_id_;
-
   file_no_t file_no = epoch_id_to_file_no(mds, epoch_id);
   page_no_t page_no = epoch_id_to_page_no(mds, epoch_id);
   struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, file_no);
 
+  NVWAL_CHECK_ERROR(mds_bufmgr_alloc_page(bufmgr, file, page_no, &buffer));
+  
   /* 
-   * We are always guaranteed to have space in the page as we write epochs 
-   * sequentially. An epoch that requires a new page will request the next 
-   * page_no.
-   */  
-  ret = mds_bufmgr_buffer_page(&mds->bufmgr_, file, page_no, &buffer);
-
+   * If we reach here, then it's guaranteed that the buffered page has enough 
+   * space to hold the epoch.
+   */
   struct Page* page = mds_bufmgr_page(buffer);
   page_offset_t epoch_off = epoch_id_to_page_offset(mds, epoch_id);
 
@@ -1128,10 +1126,15 @@ nvwal_error_t mds_write_epoch(
   nvwal_atomic_fetch_add(&mds->latest_epoch_, 1);
 
   return 0;
+}
 
-error_return:
-  errno = ret;
-  return ret;
+
+nvwal_error_t mds_writeback(struct NvwalContext* wal)
+{
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
+
+  return mds_bufmgr_writeback(bufmgr);
 }
 
 
@@ -1148,10 +1151,11 @@ nvwal_error_t mds_rollback_to_epoch(
   page_no_t page_no = epoch_id_to_page_no(mds, epoch);
   struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, file_no);
 
+#if 0
   /* 
    * Buffer page containing the truncation point. 
    */
-  NVWAL_CHECK_ERROR(mds_bufmgr_buffer_page(bufmgr, file, page_no, &buffer));
+  NVWAL_CHECK_ERROR(mds_bufmgr_alloc_page(bufmgr, file, page_no, &buffer));
 
   /* 
    * Truncation point is now located in the nvram buffer. 
@@ -1167,6 +1171,6 @@ nvwal_error_t mds_rollback_to_epoch(
   if (buffer->page_no_ <= num_pages) {
     NVWAL_CHECK_ERROR(mds_io_truncate_file(file, buffer->page_no_-1));
   }
-
+#endif
   return 0;
 }
