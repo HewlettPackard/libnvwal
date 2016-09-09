@@ -750,6 +750,11 @@ nvwal_error_t mds_bufmgr_alloc_page(
   nvwal_error_t ret;
   struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[file->file_no_];
 
+  if (page_no == kNvwalInvalidPage) {
+    ret = EINVAL;
+    goto error_return;
+  }
+
   if (buffer->page_no_ == 0) {
     /* buffer is free: just use it */
     buffer->file_ = file;
@@ -760,20 +765,23 @@ nvwal_error_t mds_bufmgr_alloc_page(
     /* do nothing: page is already allocated and buffered */
     buffer->dirty_ = 1;
     *bufferp = buffer;
-    ret = 0;
   } else if (page_no == buffer->page_no_+1) {
     /* we can recycle buffer only if clean */
     if (buffer->dirty_ == 0) {
       nvwal_atomic_store(&buffer->page_no_, page_no);
       buffer->dirty_ = 1;
       *bufferp = buffer;
-      ret = 0;
     } else {
       ret = ENOBUFS;
+      goto error_return;
     }
   } else {
     assert(0 && "this shouldn't happen");
   }
+  
+  return 0;
+
+error_return:
   return ret;
 }
 
@@ -899,12 +907,13 @@ static nvwal_error_t mds_recover(struct NvwalContext* wal)
 
     if (latest_epoch < latest_paged_epoch) {
       /* Complete outstanding rollback/truncation */
-      //fprintf(stderr, "OUTSTANDING ROLLBACK\n");
       mds_rollback_to_epoch(wal, latest_epoch);
     } else {
       /* Initialize buffer to latest page */
       page_no_t latest_epoch_page = epoch_id_to_page_no(mds, latest_epoch);
-      mds_bufmgr_alloc_page(bufmgr, file, latest_epoch_page, &buffer);
+      if (latest_epoch_page != kNvwalInvalidPage) {
+        mds_bufmgr_alloc_page(bufmgr, file, latest_epoch_page, &buffer);
+      }
     }
 
     if (latest_epoch > mds->latest_epoch_) {
@@ -1013,7 +1022,8 @@ nvwal_error_t mds_epoch_iterator_prefetch(
   page_no_t nvbuf_page_no = nvwal_atomic_load(&nvbuf->page_no_);
 
   /* Try reading from nvram buffer. */
-  if (nvbuf_page_no == page_no) {
+  if (nvbuf_page_no == page_no && nvbuf_page_no != kNvwalInvalidPage)
+  {
     /*
      * Optimistically read from the nvram buffer.
      * Please review comments under mds_bufmgr_alloc_page to understand
@@ -1051,7 +1061,7 @@ nvwal_error_t mds_epoch_iterator_prefetch(
    */
 
   /* We never prefetch past a page boundary to simplify implementation. */
-  nvwal_epoch_t max_prefetchable_epoch_id = (page_no + 1) * max_epochs_per_page(mds);
+  nvwal_epoch_t max_prefetchable_epoch_id = page_no * max_epochs_per_page(mds);
 
   nvwal_epoch_t lower_epoch_id = cur_epoch_id;
   nvwal_epoch_t upper_epoch_id =

@@ -97,8 +97,13 @@ static inline file_no_t epoch_id_to_file_no(struct NvwalMdsContext* mds, nvwal_e
  */
 static inline page_no_t epoch_id_to_page_no(struct NvwalMdsContext* mds, nvwal_epoch_t epoch_id)
 {
-  assert(epoch_id != kNvwalInvalidEpoch);
-  page_no_t page_no = 1 + normalize_epoch_id(epoch_id) / (max_epochs_per_page(mds) * kNvwalMdsMaxPagefiles);
+  page_no_t page_no;
+
+  if (epoch_id == kNvwalInvalidEpoch) {
+    page_no = kNvwalInvalidPage;
+  } else {
+    page_no = 1 + normalize_epoch_id(epoch_id) / (max_epochs_per_page(mds) * kNvwalMdsMaxPagefiles);
+  }
   return page_no;
 }
 
