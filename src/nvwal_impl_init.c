@@ -297,8 +297,8 @@ nvwal_error_t open_control_file(
 
   if (original_filesize && original_filesize != sizeof(struct NvwalControlBlock)) {
     return nvwal_raise_einval_cstr(
-    "Error: File size of the control file '%s' is not compatible\n",
-    cf_path);
+      "Error: File size of the control file '%s' is not compatible\n",
+      cf_path);
   }
 
   wal->nv_control_file_fd_ = nvwal_open_best_effort_o_direct(
@@ -313,11 +313,21 @@ nvwal_error_t open_control_file(
       cf_path);
   }
 
+  if (original_filesize != sizeof(struct NvwalControlBlock)) {
+    if (posix_fallocate(
+      wal->nv_control_file_fd_,
+      0,
+      sizeof(struct NvwalControlBlock))) {
+      errno = EINVAL;
+      return EINVAL;
+    }
+  }
+
   wal->nv_control_block_ = (struct NvwalControlBlock*) mmap(
     0,
     sizeof(struct NvwalControlBlock),
     PROT_READ | PROT_WRITE,
-    MAP_ANONYMOUS | MAP_PRIVATE,
+    MAP_SHARED,
     wal->nv_control_file_fd_,
     0);
 
@@ -602,7 +612,7 @@ nvwal_error_t init_fresh_nvram_segment(
   segment->nv_baseaddr_ = mmap(0,
                   wal->config_.segment_size_,
                   PROT_READ | PROT_WRITE,
-                  MAP_ANONYMOUS | MAP_PRIVATE,
+                  MAP_SHARED,
                   segment->nv_fd_,
                   0);
 
