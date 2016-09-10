@@ -779,6 +779,15 @@ nvwal_error_t get_epoch(
     int prev_map = (cursor->free_map_ - 1 < 0) ? (kNvwalNumReadRegions - 1) : (cursor->free_map_ - 1);
     epoch_map->seg_id_start_ = cursor->read_metadata_[prev_map].seg_id_end_;
     epoch_map->seg_start_offset_ = cursor->read_metadata_[prev_map].seg_end_offset_;
+    if (wal->config_.segment_size_ == cursor->read_metadata_[prev_map].seg_end_offset_)
+    {
+      /* we mapped to the end of the segment last time. start at beginning of the next one */
+      epoch_map->seg_id_start_++;
+      epoch_map->seg_start_offset_ = 0;
+     /* While it won't happen that we get a map fail in the middle of a segment while mapping an epoch,
+      * we can get a map fail inside of mapping a segment because multiple epochs are inside the segment.
+      */
+    }
      /* Do we need to clean up the previous mapping before 
      * mapping more of this epoch?
      * */
@@ -796,7 +805,7 @@ nvwal_error_t get_epoch(
    * last epoch requested */
   nvwal_epoch_t epoch_to_map = epoch_meta.epoch_id_;
   epoch_map->seg_id_end_ = epoch_map->seg_id_start_;
-  epoch_map->seg_end_offset_ = 0;
+  epoch_map->seg_end_offset_ = epoch_map->seg_start_offset_;
   nvwal_dsid_t segment_id = epoch_map->seg_id_start_;
 
   do
@@ -835,9 +844,8 @@ nvwal_error_t get_epoch(
 
     /* Lookup or infer the filename for this segment */
     /* Is it on NVDIMM or disk? */
-#if 0
     char backing_path[kNvwalMaxPathLength];
-    if (0)
+    if (0) /*FIXME*/
     {   
       /* Atomically mark the segment as in use, if it's in NVDIMM */
       nvwal_concat_sequence_filename(
@@ -851,12 +859,12 @@ nvwal_error_t get_epoch(
     } else
     {
       nvwal_concat_sequence_filename(
-        wal_->config_.disk_root_,
+        wal->config_.disk_root_,
         "nvwal_ds",
         segment_id,
         backing_path);
     }
-#endif
+
     int fd = -1; /*= open();*/
     if (-1 == fd)
     {
@@ -884,6 +892,7 @@ nvwal_error_t get_epoch(
           //we were prefetching some future epoch */
           cursor->prefetch_complete_ = 0;
         }
+        cursor->current_map_ = cursor->free_map_;
         cursor->free_map_++;
         if (cursor->free_map_ >= kNvwalNumReadRegions)
         {
@@ -901,7 +910,7 @@ nvwal_error_t get_epoch(
       if (MAP_FAILED == fixed_map)
       {
         error_code = errno;
-        if (cursor->current_epoch_ == epoch_to_map)
+        if (cursor->current_epoch_ == target_epoch_meta.epoch_id_)
         {
           cursor->fetch_complete_ = 0;
         } else
@@ -909,6 +918,7 @@ nvwal_error_t get_epoch(
           //we were prefetching some future epoch */
           cursor->prefetch_complete_ = 0;
         }
+        cursor->current_map_ = cursor->free_map_;
         cursor->free_map_++;
         if (cursor->free_map_ >= kNvwalNumReadRegions)
         {
@@ -921,8 +931,15 @@ nvwal_error_t get_epoch(
     mmap_addr += map_len;
 
     epoch_map->mmap_len_ += map_len;
+    if (epoch_map->seg_id_end_ == segment_id)
+    {
+      /* we just mapped more of the same segment */
+      epoch_map->seg_end_offset_ += map_len;
+    } else
+    {
+      epoch_map->seg_end_offset_ = map_len;
+    }
     epoch_map->seg_id_end_ = segment_id;
-    epoch_map->seg_end_offset_ = map_len;
     segment_id++;
   
   } while (segment_id <= epoch_meta.to_seg_id_);
@@ -936,8 +953,10 @@ nvwal_error_t get_epoch(
     }
     epoch_to_map++;
     //mds_read_epoch(wal->mds, epoch_to_map, &epoch_meta); //need to catch a return code
+    segment_id = epoch_meta.from_seg_id_;
   } while (epoch_to_map <= cursor->end_epoch_);
 
+  cursor->current_map_ = cursor->free_map_;
   cursor->free_map_++;
   if (cursor->free_map_ >= kNvwalNumReadRegions)
   {
@@ -946,39 +965,26 @@ nvwal_error_t get_epoch(
 
   return error_code; /* no error */
 }
-#if 0
-nvwal_error_t consumed_epoch(
-  struct NvwalContext* wal,
-  nvwal_epoch_t const epoch)
+
+nvwal_error_t consumed_map(
+  struct NvwalLogCursor* cursor,
+  struct NvwalEpochMapMetadata* epoch_map)
 {
   nvwal_error_t error_code = 0;
-  struct NvwalReaderContext *reader = &wal->reader_;
 
-  struct MdsEpochMetadata epoch_meta;
-  //mds_read_epoch(wal->mds, epoch, &epoch_meta); //need to catch a return code
-
-  /* Need guard against client claiming to have 
-   * consumed an epoch which is not the mmapped epoch.
-   * ReaderContext should have a mapping between mmap_start and an epoch
-   * number which will bemore easily handled with prefetching machinery.
-   */
-
-  if (NULL != reader->mmap_start_)
+  if (NULL == epoch_map->mmap_start_)
   {
-    /* We only know about the last contiguous mapping we completed.
-     * get_epoch() unmapped the previous region when retrying to finish mapping the
-     * desired epoch. Can the client abuse this API and cause us to
-     * lose track of maps and be unable munmap them? */
-    munmap(reader->mmap_start_, reader->mmap_len_);
-    reader->mmap_start_ = NULL;
-    reader->mmap_len_ = 0;
+    /* This isn't an active mapping... */
+   return error_code; /* FIXME */
   }
 
-  nvwal_dsid_t segment_id = reader->seg_id_start_; 
-  /* If we couldn't mmap the entire epoch in a contiguous mapping, seg_id_end_ is the one we failed to map */
-  /* If !fetch_complete_ and start_ == end_, it means we failed on mapping the first segment. Nothing to do. 
-   * segment_id_last < segment_id */ 
-  nvwal_dsid_t segment_id_last =  (reader->fetch_complete_) ? epoch_meta.to_seg_id_ : reader->seg_id_end_-1;
+  munmap(epoch_map->mmap_start_, epoch_map->mmap_len_);
+  epoch_map->mmap_start_ = NULL;
+  epoch_map->mmap_len_ = 0;
+
+
+  /* Don't forget to unpin the segments that are in nvdimm */
+  nvwal_dsid_t segment_id = epoch_map->seg_id_start_; 
 
   do 
   {
@@ -991,12 +997,12 @@ nvwal_error_t consumed_epoch(
 
     segment_id++;
   
-  } while (segment_id <= segment_id_last);
+  } while (segment_id <= epoch_map->seg_id_end_);
 
 
   return error_code; /* no error */
 }
-#endif
+
 nvwal_error_t nvwal_open_log_cursor(
   struct NvwalContext* wal,
   struct NvwalLogCursor* out,
@@ -1034,38 +1040,27 @@ nvwal_error_t nvwal_close_log_cursor(
   
   nvwal_error_t error_code = 0;
 
+  for (int i = 0; i < kNvwalNumReadRegions; i++)
+  {
+    consumed_map(cursor, &(cursor->read_metadata_[i]));
+  }
+
+  memset(cursor, 0, sizeof(*cursor));
+
   return error_code;
 
 }
 
-nvwal_error_t nvwal_cursor_next_epoch(
+/* @brief Looks for the desired epoch (epoch_meta) in the rest of the mmapped region.
+ * Updates the current_epoch, data_, and data_len_ in cursor, if found.
+ */
+nvwal_error_t get_prefetched_epoch(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor) {
+  struct NvwalLogCursor* cursor,
+  struct NvwalEpochMapMetadata* epoch_map,
+  struct MdsEpochMetadata* epoch_meta)
+{
 
-  nvwal_error_t error_code = 0;
-
-  if (kNvwalInvalidEpoch == cursor->current_epoch_)
-  {
-    cursor->current_epoch_ = cursor->start_epoch_;
-    cursor->fetch_complete_ = 0;
-  }
-
-  /* Lookup the epoch info from the MDS */
-  struct MdsEpochMetadata epoch_meta;
-  if (cursor->fetch_complete_)
-  {
-    //We can unmap cursor->current_epoch_ now
-    //mds_read_epoch(wal->mds, cursor->current_epoch_ + 1, &epoch_meta); //need to catch a return code
-  } else
-  {
-    //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
-    /* If we are calling again and we didn't complete the fetch of current_epoch_, we must
-     * have consumed all of read_metadata[current_map]*/
-    cursor->current_map_++;
-    cursor->current_map_ = cursor->current_map_%kNvwalNumReadRegions;
-  }
-  /* Is at least part of the desired epoch already fetched? */
-  struct NvwalEpochMapMetadata* epoch_map = cursor->read_metadata_ + cursor->current_map_;
   /* If we have part of the epoch in epoch_map, we have the following cases:
    * case 1: epoch_map contains the start of the epoch but not the end,
    * case 2: epoch map_contains that start and end of the epoch,
@@ -1073,21 +1068,33 @@ nvwal_error_t nvwal_cursor_next_epoch(
    * case 4: epoch_map contains the end of the epoch.
    */
   /*if map valid, look at read_metadata[current_map] and return if found */
-  if (NULL != epoch_map->mmap_start_)
+  if (NULL == epoch_map->mmap_start_)
   {
+    return 1;
+  }
+    nvwal_error_t error_code = 0;
     uint64_t logical_map_start = epoch_map->seg_id_start_*wal->config_.segment_size_ 
                                  + epoch_map->seg_start_offset_;
     uint64_t logical_map_end = epoch_map->seg_id_end_*wal->config_.segment_size_ 
                                + epoch_map->seg_end_offset_;
-    uint64_t logical_epoch_start = epoch_meta.from_seg_id_*wal->config_.segment_size_ 
-                                   + epoch_meta.from_offset_;
-    uint64_t logical_epoch_end = epoch_meta.to_seg_id_*wal->config_.segment_size_ 
-                                 + epoch_meta.to_off_;
+    uint64_t logical_epoch_start = epoch_meta->from_seg_id_*wal->config_.segment_size_ 
+                                   + epoch_meta->from_offset_;
+    uint64_t logical_epoch_end = epoch_meta->to_seg_id_*wal->config_.segment_size_ 
+                                 + epoch_meta->to_off_;
     
     if (cursor->fetch_complete_)
     {
-      /* We are looking for the beginning of epoch_meta.epoch_id_ */
-      cursor->data_ = epoch_map->mmap_start_ + logical_epoch_start - logical_map_start;
+      /* We are looking for the beginning of epoch_meta.epoch_id_ (current_epoch+1)*/
+      if (logical_epoch_start >= logical_map_end)
+      {
+        /* It's beyond the end of the this mapping. 
+         * We are done with this mapping so clean it up here. */
+        consumed_map(cursor, epoch_map);
+        return 1;
+      } 
+      
+        cursor->data_ = epoch_map->mmap_start_ + logical_epoch_start - logical_map_start;
+     
       /* Is the end of the epoch in this mapping? */
       if (logical_epoch_end <= logical_map_end)
       {
@@ -1115,13 +1122,59 @@ nvwal_error_t nvwal_cursor_next_epoch(
         cursor->fetch_complete_ = 0;
       }
     }
-    cursor->current_epoch_ = epoch_meta.epoch_id_;
+    cursor->current_epoch_ = epoch_meta->epoch_id_;
+    return error_code;
+}
+
+nvwal_error_t nvwal_cursor_next_epoch(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor) {
+
+  nvwal_error_t error_code = 0;
+
+  struct MdsEpochMetadata epoch_meta;
+  if (kNvwalInvalidEpoch == cursor->current_epoch_)
+  {
+    /* First call to next_epoch after opening the cursor */
+    cursor->current_epoch_ = cursor->start_epoch_;
+    //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
+    error_code = get_epoch(wal, cursor, epoch_meta);
+    cursor->data_ = cursor->read_metadata_[cursor->current_map_].mmap_start_;
+    cursor->data_len_ = cursor->read_metadata_[cursor->current_map_].mmap_len_;
+    return error_code;
+  } 
+
+  /* Lookup the epoch info from the MDS */
+  if (cursor->fetch_complete_)
+  {
+    //are we at the end of the desired epoch range? if fetch_complete_, then this is a mistaken call.
+    //We can unmap cursor->current_epoch_ now or just unmap the entire mapping later.
+    //mds_read_epoch(wal->mds, cursor->current_epoch_ + 1, &epoch_meta); //need to catch a return code
   } else
   {
-    /* else go fetch it (and possibly more). */
-    error_code = get_epoch(wal, cursor, epoch_meta);
+    //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
+    /* If we are calling again and we didn't complete the fetch of current_epoch_, we must
+     * have consumed all of read_metadata[current_map]*/
+    goto fetch_more;
   }
 
+  /* Is at least part of the desired epoch already fetched? */
+  struct NvwalEpochMapMetadata* epoch_map = cursor->read_metadata_ + cursor->current_map_;
+  error_code = get_prefetched_epoch(wal, cursor, epoch_map, &epoch_meta);
+  if (0 == error_code)
+  {
+    return error_code;  
+  }
+  
+fetch_more:
+  {
+    /* else go fetch it (and possibly more). */
+    /* don't unmap our current map here. we need to see how much progress we made
+     * on the epoch we only partially mapped. */
+    error_code = get_epoch(wal, cursor, epoch_meta);
+    cursor->data_ = cursor->read_metadata_[cursor->current_map_].mmap_start_;
+    cursor->data_len_ = cursor->read_metadata_[cursor->current_map_].mmap_len_;
+  }
 
   return error_code;
 

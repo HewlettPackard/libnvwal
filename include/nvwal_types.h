@@ -775,16 +775,16 @@ struct NvwalEpochMapMetadata {
  */
 struct NvwalLogCursor {
   struct NvwalContext* wal_;
-  nvwal_epoch_t current_epoch_;
-  uint8_t fetch_complete_; /* Do we have to break the epoch into multiple mappings? */
+  nvwal_epoch_t current_epoch_; /* The epoch the client is currently trying to read */
+  uint8_t fetch_complete_; /* Did we have to break the current_epoch_ into multiple mappings? */
   uint8_t prefetch_complete_; /* Did we stop in the middle of mapping a future desired epoch? */
   nvwal_byte_t* data_;
   uint64_t data_len_;
   nvwal_epoch_t start_epoch_; /* First epoch requested in the range */
   nvwal_epoch_t end_epoch_; /* Last epoch requested in the range */
-  int8_t current_map_;
-  int8_t free_map_;
-  struct NvwalEpochMapMetadata read_metadata_[2]; /* Metadata about fetched/prefetched regions */
+  int8_t current_map_; /* index into read_metadata */
+  int8_t free_map_; /* index into read_metadata */
+  struct NvwalEpochMapMetadata read_metadata_[kNvwalNumReadRegions]; /* Metadata about fetched/prefetched regions */
 };
 /**
  * @brief Represents a context of \b one stream of write-ahead-log placed in
