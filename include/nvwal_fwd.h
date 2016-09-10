@@ -23,6 +23,7 @@
  */
 struct NvwalConfig;
 struct NvwalContext;
+struct NvwalLogCursor;
 struct NvwalLogSegment;
 struct NvwalWriterContext;
 struct NvwalWriterEpochFrame;

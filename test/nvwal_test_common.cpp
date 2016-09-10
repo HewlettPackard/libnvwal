@@ -24,11 +24,13 @@
 #include <unistd.h>
 #include <valgrind.h>
 
+#include <chrono>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <boost/filesystem.hpp>
 
@@ -41,7 +43,6 @@ nvwal_error_t TestContext::init_all() {
   std::string random_name = get_random_name();
   boost::filesystem::path root_path = boost::filesystem::system_complete(random_name);
   unique_root_path_ = root_path.string();
-
   boost::filesystem::remove_all(unique_root_path_);
 
   if (!boost::filesystem::create_directories(unique_root_path_)) {
@@ -52,6 +53,10 @@ nvwal_error_t TestContext::init_all() {
 
   wal_resources_.resize(wal_count_);
 
+  return impl_startup(true);
+}
+
+nvwal_error_t TestContext::impl_startup(bool create_files) {
   // TODO(Hideaki) : following must be based on sizing_
   const uint64_t kWriterBufferSize = 1ULL << 12;
   const uint16_t kWriterCount = 2;
@@ -74,12 +79,14 @@ nvwal_error_t TestContext::init_all() {
     }
 
     std::string w_str = std::to_string(w);
-    boost::filesystem::path wal_root = root_path;
+    boost::filesystem::path wal_root = unique_root_path_;
     wal_root /= w_str;
-    if (!boost::filesystem::create_directory(wal_root)) {
-      std::cerr << "TestContext::init_all() : Fatal! failed to create the folder:"
-        << wal_root.string() << ". Check permissions etc." << std::endl;
-      return ENOENT;
+    if (create_files) {
+      if (!boost::filesystem::create_directory(wal_root)) {
+        std::cerr << "TestContext::init_all() : Fatal! failed to create the folder:"
+          << wal_root.string() << ". Check permissions etc." << std::endl;
+        return ENOENT;
+      }
     }
 
     NvwalConfig config;
@@ -109,7 +116,7 @@ nvwal_error_t TestContext::init_all() {
   return 0;
 }
 
-nvwal_error_t TestContext::uninit_all() {
+nvwal_error_t TestContext::impl_shutdown(bool remove_files) {
   nvwal_error_t last_error = 0;
   for (int w = 0; w < wal_count_; ++w) {
     auto* resource = get_resource(w);
@@ -127,9 +134,38 @@ nvwal_error_t TestContext::uninit_all() {
       last_error = resource->fsyncer_exit_code_;
     }
   }
-  boost::filesystem::remove_all(unique_root_path_);
+  if (remove_files) {
+    boost::filesystem::remove_all(unique_root_path_);
+  }
   return last_error;
 }
+
+nvwal_error_t TestContext::restart_clean() {
+  const nvwal_error_t shutdown_ret = impl_shutdown(false);
+  if (shutdown_ret) {
+    return shutdown_ret;
+  }
+
+  return impl_startup(false);
+}
+
+nvwal_error_t TestContext::wait_until_durable(
+  NvwalContext* wal,
+  nvwal_epoch_t expected_durable_epoch) {
+  while (true) {
+    nvwal_epoch_t out;
+    nvwal_error_t ret = nvwal_query_durable_epoch(wal, &out);
+    if (ret) {
+      return ret;
+    } else if (nvwal_is_epoch_equal_or_after(out, expected_durable_epoch)) {
+      break;
+    }
+    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return 0;
+}
+
 
 
 void WalResource::launch_flusher() {

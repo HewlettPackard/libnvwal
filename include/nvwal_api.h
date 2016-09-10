@@ -201,6 +201,23 @@ nvwal_error_t nvwal_query_durable_epoch(
   nvwal_epoch_t* out);
 
 /**
+ * @brief Let libnvwal know that no new logs in current DE+1 will be
+ * written any longer, which allows libnvwal to advance DE.
+ * @param[in] new_stable_epoch SE, which should be current DE+1
+ * @details
+ * After calling this method, one can wait until
+ * nvwal_query_durable_epoch() returns the stable epoch returned by
+ * this method, which should happen shortly as far as libnvwal's flusher
+ * is well catching up.
+ * You can invoke this method from an arbitrary number of threads,
+ * but there is no effect unless the given new_stable_epoch is exactly
+ * current DE+1.
+ */
+nvwal_error_t nvwal_advance_stable_epoch(
+  struct NvwalContext* wal,
+  nvwal_epoch_t new_stable_epoch);
+
+/**
  * @returns whether left > right in wrap-around-aware fashion
  * @see see http://en.wikipedia.org/wiki/Serial_number_arithmetic
  * @details

@@ -256,6 +256,11 @@ enum NvwalConstants {
   kNvwalInvalidDsid = 0,
 
   /**
+   * Represents null/invalid mds page 
+   */
+  kNvwalInvalidPage = 0,
+
+  /**
    * Throughout this library, every file path must be represented within this length,
    * including null termination and serial path suffix.
    * In several places, we assume this to avoid dynamically-allocated strings and
