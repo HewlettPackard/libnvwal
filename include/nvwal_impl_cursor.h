@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2014-2016, Hewlett-Packard Development Company, LP.
  * This program is free software; you can redistribute it and/or modify it
@@ -16,47 +15,31 @@
  * HP designates this particular file as subject to the "Classpath" exception
  * as provided by HP in the LICENSE.txt file that accompanied this code.
  */
-
-#ifndef NVWAL_IMPL_READER_H_
-#define NVWAL_IMPL_READER_H_
+#ifndef NVWAL_IMPL_CURSOR_H_
+#define NVWAL_IMPL_CURSOR_H_
 /**
- * @file nvwal_impl_reader.h
- * Internal methods for reader/cursor and testing
+ * @file nvwal_impl_cursor.h
+ * Internal functions for cursor objects in libnvwal.
  * @ingroup LIBNVWAL_INTERNAL
  * @addtogroup LIBNVWAL_INTERNAL
  * @{
  */
+
+#include "nvwal_fwd.h"
 #include "nvwal_types.h"
-#include "nvwal_mds_types.h"
 
-#ifdef __cplusplus
-/* All interface functions must be extern-C to be used from C and C++ */
-extern "C" {
-#endif  /* __cplusplus */
+struct MdsEpochMetadata;
 
-
-nvwal_error_t get_epoch(
+/** @brief Tries to mmap cursor->current_epoch_. If it cannot
+ * mmap the entire epoch into a contiguous mapping, cursor->fetch_complete
+ * will be set to 0.
+ */
+nvwal_error_t cursor_get_epoch(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor,
-  struct MdsEpochMetadata target_epoch_meta);
+  const struct MdsEpochMetadata* target_epoch_meta);
 
-
-nvwal_error_t consumed_map(
-  struct NvwalLogCursor* cursor,
-  struct NvwalEpochMapMetadata* epoch_map);
-
-
-nvwal_error_t get_prefetched_epoch(
-  struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor,
-  struct NvwalEpochMapMetadata* epoch_map,
-  struct MdsEpochMetadata* epoch_meta);
-
-
-#ifdef __cplusplus
-}
-#endif  /* __cplusplus */
 
 /** @} */
 
-#endif /* NVWAL_IMPL_READER_H_ */
+#endif  /* NVWAL_IMPL_CURSOR_H_ */

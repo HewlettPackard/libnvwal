@@ -264,15 +264,15 @@ static inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
  * OEH (Omitted Error Handling) just for ease of read!
  * @code{.c}
  * struct NvwalLogCursor cursor;
- * nvwal_open_log_cursor(wal, 123, 234, &cursor);  .. OEM
+ * nvwal_open_log_cursor(wal, 123, 234, &cursor);  .. OEH
  * while (nvwal_cursor_is_valid(wal, &cursor)) {
  *   nvwal_epoch_t epoch = nvwal_cursor_get_current_epoch(wal, &cursor);
  *   const nvwal_byte_t* data = nvwal_cursor_get_data(wal, &cursor);
  *   const uint64_t len = nvwal_cursor_get_data_length(wal, &cursor);
  *   ... (process the logs!)
- *   nvwal_cursor_next(wal, &cursor);  .. OEM
+ *   nvwal_cursor_next(wal, &cursor);  .. OEH
  * }
- * nvwal_close_log_cursor(wal, &cursor);  .. OEM
+ * nvwal_close_log_cursor(wal, &cursor);  .. OEH
  * @endcode
  */
 nvwal_error_t nvwal_open_log_cursor(
@@ -296,6 +296,7 @@ nvwal_error_t nvwal_close_log_cursor(
 
 /**
  * @brief Makes the next epoch accessible through the cursor.
+ * @pre nvwal_cursor_is_valid(wal, cursor)
  * @details
  * After calling this method, the cursor may or may not be in
  * another epoch.
@@ -308,21 +309,54 @@ nvwal_error_t nvwal_cursor_next(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor);
 
-uint8_t nvwal_cursor_is_valid(
+/** @return whether the cursor is ready to return log entries in some epoch */
+static inline uint8_t nvwal_cursor_is_valid(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor);
-  
-nvwal_byte_t* nvwal_cursor_get_data(
-  struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor);
+  struct NvwalLogCursor* cursor) {
+  if (cursor->data_) {
+    return 1U;
+  } else {
+    return 0U;
+  }
+}
 
-uint64_t nvwal_cursor_get_data_length(
+/**
+ * @return VA-mapping for the cursor's current data
+ * @pre nvwal_cursor_is_valid(wal, cursor)
+ * @note Please call this method after \e each nvwal_cursor_next().
+ * It might be the same virtual address, might be \b not.
+ */
+static inline nvwal_byte_t* nvwal_cursor_get_data(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor);
+  struct NvwalLogCursor* cursor) {
+  return cursor->data_;
+}
 
-nvwal_epoch_t nvwal_cursor_get_current_epoch(
+/**
+ * @return byte length of the cursor's current data
+ * @pre nvwal_cursor_is_valid(wal, cursor)
+ */
+static inline uint64_t nvwal_cursor_get_data_length(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor);
+  struct NvwalLogCursor* cursor) {
+  return cursor->data_len_;
+}
+
+/**
+ * @return epoch from which this cursor is now returning log entries
+ * @pre nvwal_cursor_is_valid(wal, cursor)
+ * @details
+ * Our cursor (logically) returns log entries in only one epoch even when
+ * it has only a few bytes. This method thus always has a single epoch to return.
+ * Even in the aforementioned case, don't worry about iteration overhead;
+ * we internally map a file covering multiple epochs, and entail almost
+ * nothing to move on to next epoch in that case.
+ */
+static inline nvwal_epoch_t nvwal_cursor_get_current_epoch(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor) {
+  return cursor->current_epoch_;
+}
 
 #ifdef __cplusplus
 }
