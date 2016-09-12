@@ -50,6 +50,7 @@ TEST(NvwalRestartTest, NoLog) {
 
   EXPECT_EQ(0, context.uninit_all());
 }
+
 TEST(NvwalRestartTest, OneWriterOneEpoch) {
   TestContext context(1);
   EXPECT_EQ(0, context.init_all());
@@ -77,6 +78,20 @@ TEST(NvwalRestartTest, OneWriterOneEpoch) {
   wal = &resource->wal_instance_;
   EXPECT_EQ(0, nvwal_query_durable_epoch(wal, &durable_epoch));
   EXPECT_EQ(1U, durable_epoch);
+
+  struct NvwalLogCursor cursor;
+  EXPECT_EQ(0, nvwal_open_log_cursor(wal, 1U, 1U, &cursor));
+  while (nvwal_cursor_is_valid(wal, &cursor)) {
+    EXPECT_EQ(1U, nvwal_cursor_get_current_epoch(wal, &cursor));
+    const nvwal_byte_t* data = nvwal_cursor_get_data(wal, &cursor);
+    const uint64_t len = nvwal_cursor_get_data_length(wal, &cursor);
+    EXPECT_EQ(kBytes, len);
+    for (uint32_t i = 0; i < len; ++i) {
+      EXPECT_EQ(42, data[i]) << i;
+    }
+    EXPECT_EQ(0, nvwal_cursor_next(wal, &cursor));
+  }
+  EXPECT_EQ(0, nvwal_close_log_cursor(wal, &cursor));
 
   EXPECT_EQ(0, context.uninit_all());
 }

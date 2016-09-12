@@ -1003,14 +1003,16 @@ nvwal_error_t consumed_map(
   return error_code; /* no error */
 }
 
+/* sub routine of nvwal_open_log_cursor */
+nvwal_error_t cursor_next_initial(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor);
+
 nvwal_error_t nvwal_open_log_cursor(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* out,
   nvwal_epoch_t begin_epoch,
-  nvwal_epoch_t end_epoch) {
-
-  nvwal_error_t error_code = 0;
-
+  nvwal_epoch_t end_epoch,
+  struct NvwalLogCursor* out) {
   memset(out, 0, sizeof(*out));
 
   out->current_epoch_ = kNvwalInvalidEpoch;
@@ -1021,8 +1023,7 @@ nvwal_error_t nvwal_open_log_cursor(
   out->end_epoch_ = end_epoch; 
   out->free_map_ = 0;
   out->current_map_ = 0;
-  for (int i = 0; i < kNvwalNumReadRegions; i++)
-  {
+  for (int i = 0; i < kNvwalNumReadRegions; i++) {
     out->read_metadata_[i].seg_id_start_ = kNvwalInvalidDsid; 
     out->read_metadata_[i].seg_id_end_ = kNvwalInvalidDsid;
     out->read_metadata_[i].seg_start_offset_ = 0;
@@ -1031,24 +1032,25 @@ nvwal_error_t nvwal_open_log_cursor(
     out->read_metadata_[i].mmap_len_ = 0;
   }
 
-  return error_code;
+  nvwal_error_t error_code = cursor_next_initial(wal, out);
+  if (error_code) {
+    /* Immediately close it in this case. */
+    nvwal_close_log_cursor(wal, out);
+    return error_code;
+  }
+
+  return 0;
 }
 
 nvwal_error_t nvwal_close_log_cursor(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor) {
-  
-  nvwal_error_t error_code = 0;
-
-  for (int i = 0; i < kNvwalNumReadRegions; i++)
-  {
+  for (int i = 0; i < kNvwalNumReadRegions; i++) {
     consumed_map(cursor, &(cursor->read_metadata_[i]));
   }
 
   memset(cursor, 0, sizeof(*cursor));
-
-  return error_code;
-
+  return 0;
 }
 
 /* @brief Looks for the desired epoch (epoch_meta) in the rest of the mmapped region.
@@ -1126,32 +1128,37 @@ nvwal_error_t get_prefetched_epoch(
     return error_code;
 }
 
-nvwal_error_t nvwal_cursor_next_epoch(
+nvwal_error_t cursor_next_initial(
+  struct NvwalContext* wal,
+  struct NvwalLogCursor* cursor) {
+  assert(kNvwalInvalidEpoch == cursor->current_epoch_);
+  nvwal_error_t error_code = 0;
+
+  /* First call to next_epoch after opening the cursor */
+  cursor->current_epoch_ = cursor->start_epoch_;
+  //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
+  struct MdsEpochMetadata epoch_meta;
+  NVWAL_CHECK_ERROR(get_epoch(wal, cursor, epoch_meta));
+  cursor->data_ = cursor->read_metadata_[cursor->current_map_].mmap_start_;
+  cursor->data_len_ = cursor->read_metadata_[cursor->current_map_].mmap_len_;
+  return 0;
+}
+
+nvwal_error_t nvwal_cursor_next(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor) {
 
   nvwal_error_t error_code = 0;
 
   struct MdsEpochMetadata epoch_meta;
-  if (kNvwalInvalidEpoch == cursor->current_epoch_)
-  {
-    /* First call to next_epoch after opening the cursor */
-    cursor->current_epoch_ = cursor->start_epoch_;
-    //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
-    error_code = get_epoch(wal, cursor, epoch_meta);
-    cursor->data_ = cursor->read_metadata_[cursor->current_map_].mmap_start_;
-    cursor->data_len_ = cursor->read_metadata_[cursor->current_map_].mmap_len_;
-    return error_code;
-  } 
+  assert(kNvwalInvalidEpoch != cursor->current_epoch_);
 
   /* Lookup the epoch info from the MDS */
-  if (cursor->fetch_complete_)
-  {
+  if (cursor->fetch_complete_) {
     //are we at the end of the desired epoch range? if fetch_complete_, then this is a mistaken call.
     //We can unmap cursor->current_epoch_ now or just unmap the entire mapping later.
     //mds_read_epoch(wal->mds, cursor->current_epoch_ + 1, &epoch_meta); //need to catch a return code
-  } else
-  {
+  } else {
     //mds_read_epoch(wal->mds, cursor->current_epoch_, &epoch_meta); //need to catch a return code
     /* If we are calling again and we didn't complete the fetch of current_epoch_, we must
      * have consumed all of read_metadata[current_map]*/

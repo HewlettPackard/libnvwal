@@ -248,40 +248,63 @@ static inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
   }
 }
 
-
 /**
- * @brief Fetches the requested epoch for the application
- * @param[in] epoch The requested epoch
- * @param[out] buf Pointer to epoch data
- * @param[out] len Length of buf
- *
+ * @brief Opens a cursor to read durable logs and makes it ready to return
+ * logs in the first epoch.
+ * @param[in] wal WAL stream to read from
+ * @param[in] being_epoch Inclusive beginning of the epochs to read
+ * @param[in] end_epoch Inclusive ending of the epochs to read
+ * @param[out] cursor Cursor object to initialize.
+ * @return Any error on opening the cursor or reading the first epoch.
+ * Iff this returns a non-zero error, the caller does not have to call
+ * nvwal_close_log_cursor().
+ * @details
+ * To read durable logs, open and iterate over a cursor like the following.
+ * Remember, you must have error handlings.
+ * OEH (Omitted Error Handling) just for ease of read!
+ * @code{.c}
+ * struct NvwalLogCursor cursor;
+ * nvwal_open_log_cursor(wal, 123, 234, &cursor);  .. OEM
+ * while (nvwal_cursor_is_valid(wal, &cursor)) {
+ *   nvwal_epoch_t epoch = nvwal_cursor_get_current_epoch(wal, &cursor);
+ *   const nvwal_byte_t* data = nvwal_cursor_get_data(wal, &cursor);
+ *   const uint64_t len = nvwal_cursor_get_data_length(wal, &cursor);
+ *   ... (process the logs!)
+ *   nvwal_cursor_next(wal, &cursor);  .. OEM
+ * }
+ * nvwal_close_log_cursor(wal, &cursor);  .. OEM
+ * @endcode
  */
-
-/**
- * @brief Notifies the reader that the epoch has been processed
- * and is no longer needed. If the epoch was not completely fetched,
- * it is desirable, but not necessary, to call consumed_epoch() before
- * reinvoking get_epoch();
- * @param[in] epoch The consumed epoch
- *
- */
-
 nvwal_error_t nvwal_open_log_cursor(
   struct NvwalContext* wal, 
-  struct NvwalLogCursor* out,
   nvwal_epoch_t begin_epoch,
-  nvwal_epoch_t end_epoch);
+  nvwal_epoch_t end_epoch,
+  struct NvwalLogCursor* cursor);
 
+/**
+ * Release all resources acquired for the log cursor.
+ * This method is guaranteed to be idempotent.
+ * You can call this method many times, but not from multiple threads.
+ * @return So far this always returns zero, and hopefully it should
+ * remain like that because errors on close/release are hard to
+ * handle. But, in case of future change, we have the return value
+ * declared.
+ */
 nvwal_error_t nvwal_close_log_cursor(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor);
 
-/** @brief Makes the next epoch accessible through the cursor.
+/**
+ * @brief Makes the next epoch accessible through the cursor.
+ * @details
+ * After calling this method, the cursor may or may not be in
+ * another epoch.
  * In the case that an epoch was broken into multiple mappings,
  * the cursor is updated to make the next mapping accessible,
  * but current_epoch is not updated.
+ * The name of this method is thus \b not next_epoch but just next.
  */
-nvwal_error_t nvwal_cursor_next_epoch(
+nvwal_error_t nvwal_cursor_next(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor);
 

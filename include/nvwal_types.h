@@ -758,33 +758,47 @@ struct NvwalMdsContext {
  * region, if that happens to be the case.
  */
 struct NvwalEpochMapMetadata {
-  nvwal_dsid_t seg_id_start_; /* The first segment we mmapped for this get_epoch call */
-  nvwal_dsid_t seg_id_end_; /* The last segment we tried to mmap */
+  /* The first segment we mmapped for this get_epoch call */
+  nvwal_dsid_t seg_id_start_;
+  /* The last segment we tried to mmap */
+  nvwal_dsid_t seg_id_end_;
   uint32_t seg_start_offset_;
   uint32_t seg_end_offset_;
-  nvwal_byte_t* mmap_start_; /* Remember our mmap info for munmap later */
-  uint64_t mmap_len_; /* We only remember info for one mapping. If the epoch needs
-                      * multiple mappings, unmap the previous mapping before
-                      * mapping the next chunk. */ 
+  /* Remember our mmap info for munmap later */
+  nvwal_byte_t* mmap_start_;
+  /**
+   * We only remember info for one mapping. If the epoch needs
+   * multiple mappings, unmap the previous mapping before
+   * mapping the next chunk.
+   */
+  uint64_t mmap_len_;
 };
 
 /**
  * @brief Represents the context of the reading API for retrieving prior
- * epoch data. Must be initialized/uninitialized via nvwal_reader_init()
- * and nvwal_reader_uninit().
+ * epoch data. Must be initialized/uninitialized via nvwal_open_log_cursor()
+ * and nvwal_close_log_cursor().
  */
 struct NvwalLogCursor {
   struct NvwalContext* wal_;
-  nvwal_epoch_t current_epoch_; /* The epoch the client is currently trying to read */
-  uint8_t fetch_complete_; /* Did we have to break the current_epoch_ into multiple mappings? */
-  uint8_t prefetch_complete_; /* Did we stop in the middle of mapping a future desired epoch? */
+  /* The epoch the client is currently trying to read */
+  nvwal_epoch_t current_epoch_;
+  /* Did we have to break the current_epoch_ into multiple mappings? */
+  uint8_t fetch_complete_;
+  /* Did we stop in the middle of mapping a future desired epoch? */
+  uint8_t prefetch_complete_;
   nvwal_byte_t* data_;
   uint64_t data_len_;
-  nvwal_epoch_t start_epoch_; /* First epoch requested in the range */
-  nvwal_epoch_t end_epoch_; /* Last epoch requested in the range */
-  int8_t current_map_; /* index into read_metadata */
-  int8_t free_map_; /* index into read_metadata */
-  struct NvwalEpochMapMetadata read_metadata_[kNvwalNumReadRegions]; /* Metadata about fetched/prefetched regions */
+  /* First epoch requested in the range */
+  nvwal_epoch_t start_epoch_;
+  /* Last epoch requested in the range */
+  nvwal_epoch_t end_epoch_;
+  /* index into read_metadata */
+  int8_t current_map_;
+  /* index into read_metadata */
+  int8_t free_map_;
+  /* Metadata about fetched/prefetched regions */
+  struct NvwalEpochMapMetadata read_metadata_[kNvwalNumReadRegions];
 };
 /**
  * @brief Represents a context of \b one stream of write-ahead-log placed in

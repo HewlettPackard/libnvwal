@@ -62,7 +62,7 @@ TEST(NvwalReaderTest, FindPrefetchedEpoch) {
   struct NvwalEpochMapMetadata epoch_map;
   struct NvwalLogCursor cursor;
 
-  EXPECT_EQ(0, nvwal_open_log_cursor(wal, &cursor, 0, 10));
+  EXPECT_EQ(0, nvwal_open_log_cursor(wal, 0, 10, &cursor));
 
   /* Make a fake epoch_map and various epoch_meta to hit
    * various prefetch cases
