@@ -252,8 +252,8 @@ static inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
  * @brief Opens a cursor to read durable logs and makes it ready to return
  * logs in the first epoch.
  * @param[in] wal WAL stream to read from
- * @param[in] being_epoch Inclusive beginning of the epochs to read
- * @param[in] end_epoch Inclusive ending of the epochs to read
+ * @param[in] being_epoch \b Inclusive beginning of the epochs to read
+ * @param[in] end_epoch \b Exclusive ending of the epochs to read
  * @param[out] cursor Cursor object to initialize.
  * @return Any error on opening the cursor or reading the first epoch.
  * Iff this returns a non-zero error, the caller does not have to call
@@ -285,10 +285,7 @@ nvwal_error_t nvwal_open_log_cursor(
  * Release all resources acquired for the log cursor.
  * This method is guaranteed to be idempotent.
  * You can call this method many times, but not from multiple threads.
- * @return So far this always returns zero, and hopefully it should
- * remain like that because errors on close/release are hard to
- * handle. But, in case of future change, we have the return value
- * declared.
+ * @return Returns any non-zero error code we observed while releaseing.
  */
 nvwal_error_t nvwal_close_log_cursor(
   struct NvwalContext* wal,
@@ -313,11 +310,7 @@ nvwal_error_t nvwal_cursor_next(
 static inline uint8_t nvwal_cursor_is_valid(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor) {
-  if (cursor->data_) {
-    return 1U;
-  } else {
-    return 0U;
-  }
+  return (cursor->current_epoch_ != kNvwalInvalidEpoch);
 }
 
 /**
@@ -326,10 +319,10 @@ static inline uint8_t nvwal_cursor_is_valid(
  * @note Please call this method after \e each nvwal_cursor_next().
  * It might be the same virtual address, might be \b not.
  */
-static inline nvwal_byte_t* nvwal_cursor_get_data(
+static inline const nvwal_byte_t* nvwal_cursor_get_data(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor) {
-  return cursor->data_;
+  const struct NvwalLogCursor* cursor) {
+  return cursor->cur_segment_data_ + cursor->cur_offset_;
 }
 
 /**
@@ -338,8 +331,8 @@ static inline nvwal_byte_t* nvwal_cursor_get_data(
  */
 static inline uint64_t nvwal_cursor_get_data_length(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor) {
-  return cursor->data_len_;
+  const struct NvwalLogCursor* cursor) {
+  return cursor->cur_len_;
 }
 
 /**
@@ -354,7 +347,7 @@ static inline uint64_t nvwal_cursor_get_data_length(
  */
 static inline nvwal_epoch_t nvwal_cursor_get_current_epoch(
   struct NvwalContext* wal,
-  struct NvwalLogCursor* cursor) {
+  const struct NvwalLogCursor* cursor) {
   return cursor->current_epoch_;
 }
 

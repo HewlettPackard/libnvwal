@@ -308,9 +308,11 @@ enum NvwalConstants {
   kNvwalEpochFrameCount = 5,
 
   /**
-   * Number of mmappings maintained per reader.
+   * Number of epoch-metadata information to read in cursor at a time.
+   * A larger value reduces the number of accesses to MDS from cursor
+   * at the cost of larger cursor objects.
    */
-  kNvwalNumReadRegions = 2,
+  kNvwalCursorEpochPrefetches = 2,
 
   /**
    * @brief Default page size in bytes for meta-data store.
@@ -753,25 +755,32 @@ struct NvwalMdsContext {
 };
 
 /**
- * @brief Information about one mmapped region. This region may contain more
- * than one epoch. We rely on MDS lookup to find epoch boundaries within a
- * region, if that happens to be the case.
+ * @brief Metadata about one epoch in cursor.
+ * @details
+ * Our cursor reads a few of this object at a time from MDS.
+ * When each epoch is small (just a few logs), this buffering will reduce
+ * MDS lookups.
+ * When each epoch is large (eg larger than one segment), then this buffering
+ * is not necessary.
  */
-struct NvwalEpochMapMetadata {
-  /* The first segment we mmapped for this get_epoch call */
-  nvwal_dsid_t seg_id_start_;
-  /* The last segment we tried to mmap */
-  nvwal_dsid_t seg_id_end_;
-  uint32_t seg_start_offset_;
-  uint32_t seg_end_offset_;
-  /* Remember our mmap info for munmap later */
-  nvwal_byte_t* mmap_start_;
+struct NvwalCursorEpochMetadata {
+  /** The first segment that contains any log in the epoch */
+  nvwal_dsid_t start_dsid_;
   /**
-   * We only remember info for one mapping. If the epoch needs
-   * multiple mappings, unmap the previous mapping before
-   * mapping the next chunk.
+   * The last segment that contains any log in the epoch.
+   * Named it "last", which implies inclusive, rather than "end", which implies exclusive.
    */
-  uint64_t mmap_len_;
+  nvwal_dsid_t last_dsid_;
+  /**
+   * Inclusive starting byte offset in the segment
+   * represented by start_dsid_.
+   */
+  uint32_t start_offset_;
+  /**
+   * Exclusive ending byte offset in the segment
+   * represented by end_dsid_.
+   */
+  uint32_t end_offset_;
 };
 
 /**
@@ -780,25 +789,79 @@ struct NvwalEpochMapMetadata {
  * and nvwal_close_log_cursor().
  */
 struct NvwalLogCursor {
+  /**
+   * Parent pointer. Because of this, we don't need to receive wal except
+   * open, but we might revisit it later. Immutable once constructed.
+   */
   struct NvwalContext* wal_;
-  /* The epoch the client is currently trying to read */
+  /**
+   * The epoch the client is currently trying to read.
+   * @invariant current_epoch_ == kNvwalInvalidEpoch
+   * ||  start_epoch_<= current_epoch_ < end_epoch_ (in a wrap-around aware fashion)
+   */
   nvwal_epoch_t current_epoch_;
-  /* Did we have to break the current_epoch_ into multiple mappings? */
-  uint8_t fetch_complete_;
-  /* Did we stop in the middle of mapping a future desired epoch? */
-  uint8_t prefetch_complete_;
-  nvwal_byte_t* data_;
-  uint64_t data_len_;
-  /* First epoch requested in the range */
+
+  /** Inclusive first epoch requested in the range. Immutable once constructed */
   nvwal_epoch_t start_epoch_;
-  /* Last epoch requested in the range */
+  /** Exclusive last epoch requested in the range. Immutable once constructed */
   nvwal_epoch_t end_epoch_;
-  /* index into read_metadata */
-  int8_t current_map_;
-  /* index into read_metadata */
-  int8_t free_map_;
-  /* Metadata about fetched/prefetched regions */
-  struct NvwalEpochMapMetadata read_metadata_[kNvwalNumReadRegions];
+
+  /**
+   * Byte offset from cur_segment_data_ of log data for the current epoch.
+   */
+  uint64_t cur_offset_;
+
+  /**
+   * Byte length of log data for the current epoch.
+   */
+  uint64_t cur_len_;
+
+  /**
+   * VA-mapping of log data for the current segment.
+   * We so far mmap a segment at a time, but later we will internally
+   * \e stitch multiple segments via MAP_FIXED when there is a large
+   * enough VA-region available.
+   * But, low priority because it's anyway abstracted via next() call...
+   * mmaped-length is always segment-length.
+   * @invariant Is NULL if and only if current_epoch_ == kNvwalInvalidEpoch .
+   */
+  nvwal_byte_t* cur_segment_data_;
+
+  /**
+   * File descriptor of the disk-resident segment this cursor is
+   * currently reading from. When the current segment is on NV,
+   * this is 0. Instead, cur_segment_from_nv_segment_ would be ON.
+   */
+  int64_t cur_segment_disk_fd_;
+
+  /**
+   * Whether the cur_segment_data_ is pointing to NV-segment.
+   * When true, we have pinned-down the NV-segment we are reading from,
+   * thus the cursor is responsible to remove the pin.
+   * When false, instead, we are responsible for closing
+   * cur_segment_disk_fd_ and unmapping cur_segment_data_.
+   */
+  uint8_t cur_segment_from_nv_segment_;
+
+  /**
+   * DSID of the segment this cursor is currently reading from.
+   */
+  nvwal_dsid_t cur_segment_id_;
+
+  /**
+   * Epoch value of fetched_epochs_[0].
+   */
+  nvwal_epoch_t fetched_epochs_from_;
+  /**
+   * Number of \e contiguous epochs we fetched into fetched_epochs_.
+   * They are contiguous, thus most of them might be quickly skipped
+   * when many epochs contain no logs in this WAL stream.
+   */
+  uint32_t fetched_epochs_count_;
+  /**
+   * Fetched epoch-metadata. Index-n represents an epoch fetched_epochs_from_ + n.
+   */
+  struct NvwalCursorEpochMetadata fetched_epochs_[kNvwalCursorEpochPrefetches];
 };
 /**
  * @brief Represents a context of \b one stream of write-ahead-log placed in

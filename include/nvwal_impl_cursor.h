@@ -30,14 +30,28 @@
 
 struct MdsEpochMetadata;
 
-/** @brief Tries to mmap cursor->current_epoch_. If it cannot
- * mmap the entire epoch into a contiguous mapping, cursor->fetch_complete
- * will be set to 0.
+/**
+ * Intermal method to release cursor->cur_segment_data_ and
+ * cursor->cur_segment_fd_.
+ * Used in cursor-close and a few other places.
  */
-nvwal_error_t cursor_get_epoch(
-  struct NvwalContext* wal,
+nvwal_error_t cursor_close_cur_segment(struct NvwalLogCursor* cursor);
+
+/**
+ * Internal method to open the given segment as the current segment.
+ */
+nvwal_error_t cursor_open_segment(struct NvwalLogCursor* cursor, nvwal_dsid_t dsid);
+
+/**
+ * Intermal method to read epoch metadata from the given epoch into the cursor.
+ */
+nvwal_error_t cursor_fetch_epoch_metadata(
   struct NvwalLogCursor* cursor,
-  const struct MdsEpochMetadata* target_epoch_meta);
+  nvwal_epoch_t from_epoch);
+
+
+/* sub routine of nvwal_open_log_cursor */
+nvwal_error_t cursor_next_initial(struct NvwalLogCursor* cursor);
 
 
 /** @} */
