@@ -42,6 +42,12 @@ nvwal_error_t nvwal_open_log_cursor(
   out->start_epoch_ = begin_epoch;
   out->end_epoch_ = end_epoch;
 
+  if (nvwal_is_epoch_equal_or_after(begin_epoch, end_epoch)) {
+    nvwal_output_warning("Warning: Inclusive begin_epoch is at or after"
+      " exclusive end_epoch. This might be a misuse of cursor. No results.\n");
+    return 0;
+  }
+
   nvwal_error_t error_code = cursor_next_initial(out);
   if (error_code) {
     /* Immediately close it in this case. */
@@ -167,6 +173,9 @@ nvwal_error_t cursor_fetch_epoch_metadata(
     /* Wrap-around happened. We skip zero (kInvalid) */
     to_epoch += 1;
   }
+  if (nvwal_is_epoch_after(to_epoch, cursor->end_epoch_)) {
+    to_epoch = cursor->end_epoch_;
+  }
   if (nvwal_is_epoch_after(to_epoch, cursor->wal_->durable_epoch_)) {
     to_epoch = nvwal_increment_epoch(cursor->wal_->durable_epoch_);
   }
@@ -199,8 +208,7 @@ nvwal_error_t cursor_fetch_epoch_metadata(
     ++cursor->fetched_epochs_count_;
     mds_epoch_iterator_next(&mds_iterator);
 
-    if (cur_epoch == to_epoch) {
-      assert(mds_epoch_iterator_done(&mds_iterator));
+    if (nvwal_is_epoch_equal_or_after(cur_epoch, to_epoch)) {
       break;
     }
   }
