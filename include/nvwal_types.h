@@ -764,6 +764,7 @@ struct NvwalMdsContext {
  * is not necessary.
  */
 struct NvwalCursorEpochMetadata {
+  nvwal_epoch_t epoch_;
   /** The first segment that contains any log in the epoch */
   nvwal_dsid_t start_dsid_;
   /**
@@ -849,17 +850,17 @@ struct NvwalLogCursor {
   nvwal_dsid_t cur_segment_id_;
 
   /**
-   * Epoch value of fetched_epochs_[0].
+   * Index in fetched_epochs_ that points to current_epoch_.
+   * @invariant cur_segment_data == NULL
+   * || fetched_epochs_[]fetched_epochs_current_ point to current_epoch_
    */
-  nvwal_epoch_t fetched_epochs_from_;
+  uint32_t fetched_epochs_current_;
   /**
-   * Number of \e contiguous epochs we fetched into fetched_epochs_.
-   * They are contiguous, thus most of them might be quickly skipped
-   * when many epochs contain no logs in this WAL stream.
+   * Number of epochs we fetched into fetched_epochs_.
    */
   uint32_t fetched_epochs_count_;
   /**
-   * Fetched epoch-metadata. Index-n represents an epoch fetched_epochs_from_ + n.
+   * Fetched epoch-metadata.
    */
   struct NvwalCursorEpochMetadata fetched_epochs_[kNvwalCursorEpochPrefetches];
 };

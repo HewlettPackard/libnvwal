@@ -64,14 +64,14 @@ nvwal_error_t cursor_next_initial(struct NvwalLogCursor* cursor) {
     return 0;
   }
 
-  struct NvwalCursorEpochMetadata* first_epoch_meta = cursor->fetched_epochs_;
-  NVWAL_CHECK_ERROR(cursor_open_segment(cursor, first_epoch_meta->start_dsid_));
-  cursor->cur_offset_ = first_epoch_meta->start_offset_;
-  if (first_epoch_meta->last_dsid_ != first_epoch_meta->start_dsid_) {
+  const struct NvwalCursorEpochMetadata* meta = cursor->fetched_epochs_;
+  NVWAL_CHECK_ERROR(cursor_open_segment(cursor, meta->start_dsid_));
+  cursor->cur_offset_ = meta->start_offset_;
+  if (meta->last_dsid_ != meta->start_dsid_) {
     cursor->cur_len_ = cursor->wal_->config_.segment_size_ - cursor->cur_offset_;
   } else {
-    assert(first_epoch_meta->end_offset_ >= first_epoch_meta->start_offset_);
-    cursor->cur_len_ = first_epoch_meta->end_offset_ - first_epoch_meta->start_offset_;
+    assert(meta->end_offset_ >= cursor->cur_offset_);
+    cursor->cur_len_ = meta->end_offset_ - cursor->cur_offset_;
   }
 
   return 0;
@@ -87,7 +87,7 @@ nvwal_error_t cursor_open_segment(
 
   const nvwal_dsid_t synced_dsid =
     nvwal_atomic_load(&wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
-  if (dsid >= synced_dsid) {
+  if (synced_dsid != kNvwalInvalidDsid && dsid >= synced_dsid) {
     /* The segment is on disk! */
     char path[kNvwalMaxPathLength];
     nvwal_construct_disk_segment_path(wal, dsid, path);
@@ -168,22 +168,28 @@ nvwal_error_t cursor_fetch_epoch_metadata(
     to_epoch += 1;
   }
   if (nvwal_is_epoch_after(to_epoch, cursor->wal_->durable_epoch_)) {
-    to_epoch = cursor->wal_->durable_epoch_;
+    to_epoch = nvwal_increment_epoch(cursor->wal_->durable_epoch_);
   }
 
-  cursor->fetched_epochs_from_ = from_epoch;
+  cursor->fetched_epochs_current_ = 0;
   cursor->fetched_epochs_count_ = 0;
+  if (to_epoch == from_epoch) {
+    return 0;
+  }
+
+  assert(nvwal_is_epoch_after(to_epoch, from_epoch));
   struct MdsEpochIterator mds_iterator;
   NVWAL_CHECK_ERROR(mds_epoch_iterator_init(
     cursor->wal_,
     from_epoch,
-    to_epoch,
+    to_epoch - 1U,  /* TODO FIXME this is a tentative code until MDS employs exclusive end */
     &mds_iterator));
   nvwal_epoch_t cur_epoch = from_epoch;  /* Mostly for sanity check */
   for (int i = 0; i < kNvwalCursorEpochPrefetches; ++i) {
     assert(!mds_epoch_iterator_done(&mds_iterator));
 
     assert(mds_iterator.epoch_metadata_->epoch_id_ == cur_epoch);
+    cursor->fetched_epochs_[i].epoch_ = cur_epoch;
     cursor->fetched_epochs_[i].start_dsid_ = mds_iterator.epoch_metadata_->from_seg_id_;
     cursor->fetched_epochs_[i].last_dsid_ = mds_iterator.epoch_metadata_->to_seg_id_;
     cursor->fetched_epochs_[i].start_offset_ = mds_iterator.epoch_metadata_->from_offset_;
@@ -216,35 +222,51 @@ nvwal_error_t nvwal_close_log_cursor(
 nvwal_error_t nvwal_cursor_next(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor) {
+  assert(nvwal_cursor_is_valid(wal, cursor));
+  assert(cursor->fetched_epochs_current_ < cursor->fetched_epochs_count_);
   /*
    * Cases in order of likelihood.
-   * 1) Has read a small epoch. Moving on to next epoch within the segment.
+   * 1) Completed the epoch. Moving on to next epoch within the segment.
    *   1a) Fetched epochs contain next epoch.
    *   1b) Need to fetch next epochs.
    * 2) The epoch has remaining data. Moving on to next segment.
    */
-  cursor_close_cur_segment(cursor);
+  const struct NvwalCursorEpochMetadata* meta
+    = cursor->fetched_epochs_ + cursor->fetched_epochs_current_;
+  assert(meta->epoch_ == cursor->current_epoch_);
+  if (meta->last_dsid_ == cursor->cur_segment_id_) {
+    /* Case 1) Move on to next epoch! */
+    assert(meta->end_offset_ == cursor->cur_offset_ + cursor->cur_len_);
+    cursor->current_epoch_ = nvwal_increment_epoch(cursor->current_epoch_);
+    ++cursor->fetched_epochs_current_;
 
-  /* TODO mmm, probably we should have cur_index
-  cursor->fetched_epochs_from_;
+    if (cursor->fetched_epochs_current_ < cursor->fetched_epochs_count_) {
+      /* Case 1a) Cheapest case, good! */
+    } else {
+      /* Case 1b) */
+      NVWAL_CHECK_ERROR(cursor_fetch_epoch_metadata(cursor, cursor->current_epoch_));
+      assert(cursor->fetched_epochs_current_ == 0);
+      if (cursor->fetched_epochs_count_ == 0) {
+        /* No more epochs. We've hit the end */
+        NVWAL_CHECK_ERROR(cursor_close_cur_segment(cursor));
+        return 0;
+      }
+    }
 
-  struct NvwalCursorEpochMetadata* meta = cursor->fetched_epochs_ + cursor->;
-  cursor->current_epoch_ = cursor->start_epoch_;
-  NVWAL_CHECK_ERROR(cursor_fetch_epoch_metadata(cursor, cursor->start_epoch_));
-
-  if (cursor->fetched_epochs_count_ == 0) {
-    return 0;
+    meta = cursor->fetched_epochs_ + cursor->fetched_epochs_current_;
+    assert(nvwal_is_epoch_equal_or_after(meta->epoch_, cursor->current_epoch_));
+    cursor->cur_offset_ = meta->start_offset_;
+  } else {
+    /* Case 2) This involves close/open of the segment file */
+    NVWAL_CHECK_ERROR(cursor_open_segment(cursor, cursor->cur_segment_id_ + 1U));
+    cursor->cur_offset_ = 0;
   }
 
-  NVWAL_CHECK_ERROR(cursor_open_segment(cursor, first_epoch_meta->start_dsid_));
-  cursor->cur_offset_ = first_epoch_meta->start_offset_;
-  if (first_epoch_meta->last_dsid_ != first_epoch_meta->start_dsid_) {
+  if (meta->last_dsid_ != cursor->cur_segment_id_) {
     cursor->cur_len_ = cursor->wal_->config_.segment_size_ - cursor->cur_offset_;
   } else {
-    assert(first_epoch_meta->end_offset_ >= first_epoch_meta->start_offset_);
-    cursor->cur_len_ = first_epoch_meta->end_offset_ - first_epoch_meta->start_offset_;
+    cursor->cur_len_ = meta->end_offset_ - cursor->cur_offset_;
   }
-  */
 
   return 0;
 }

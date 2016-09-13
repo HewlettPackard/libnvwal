@@ -20,10 +20,17 @@
 #include <cstring>
 #include <boost/filesystem.hpp>
 
+#include "nvwal_api.h"
 #include "nvwal_test_common.hpp"
 #include "nvwal_util.h"
 
 namespace nvwaltest {
+
+TEST(NvwalUtilTest, EpochIncrement) {
+  EXPECT_EQ(2U, nvwal_increment_epoch(1U));
+  EXPECT_EQ(3U, nvwal_increment_epoch(2U));
+  EXPECT_EQ(1ULL, nvwal_increment_epoch(0xFFFFFFFFFFFFFFFFULL));
+}
 
 TEST(NvwalUtilTest, CircularMemcpy) {
   nvwal_byte_t circular_buffer[512];

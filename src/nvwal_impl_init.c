@@ -364,7 +364,12 @@ nvwal_error_t check_adjust_on_prev_config(
       "Error: The existing libnvwal installation has a version number %llu, different from"
       " this binary's.\n",
       wal->prev_config_.libnvwal_version_);
-  } else if (wal->prev_config_.mds_page_size_ != wal->config_.mds_page_size_) {
+  } else if (wal->prev_config_.mds_page_size_ != wal->config_.mds_page_size_
+    /*
+     * Probably this adjustment should be in mds_init. so far we need to tolerate
+     * default-value cases because we do this sanity check BEFORE adjustments.
+     */
+    && (wal->config_.mds_page_size_ || wal->prev_config_.mds_page_size_ != kNvwalMdsPageSize)) {
     return nvwal_raise_einval_llu(
       "Error: The existing libnvwal installation has mds_page_size %llu, different from"
       " the given configuration.\n",
@@ -542,6 +547,15 @@ nvwal_error_t impl_init_no_error_handling(
   NVWAL_CHECK_ERROR(nvwal_open_and_syncfs(config->nv_root_));
   NVWAL_CHECK_ERROR(nvwal_open_and_syncfs(config->disk_root_));
 
+  /*
+   * All initializations that might fail have passed.
+   * Now, we persist this time's config as prev_config in the CF.
+   */
+  pmem_memcpy_persist(
+    &wal->nv_control_block_->config_,
+    &wal->config_,
+    sizeof(struct NvwalConfig));
+
   /** Now we can start accepting flusher/fsyncher */
   nvwal_impl_thread_state_get_ready(&wal->flusher_thread_state_);
   nvwal_impl_thread_state_get_ready(&wal->fsyncer_thread_state_);
@@ -691,21 +705,26 @@ nvwal_error_t init_existing_nvram_segment(
   /* In restart case, we need to figure out dsid and written_bytes_ */
   const nvwal_dsid_t ondisk_from
     = wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_;
-  const uint32_t synced_cycles = (ondisk_from - 1U) / wal->segment_count_;
-  nvwal_dsid_t dsid = synced_cycles * wal->segment_count_ + nv_segment_index + 1U;
-  if (dsid > ondisk_from) {
-    /** This means this segment in this cycle was yet to be synced to disk */
-    assert(dsid < ondisk_from + wal->segment_count_);
+  nvwal_dsid_t dsid;
+  if (ondisk_from == 0) {
+    /* This WAL instance has never synced any segment to disk */
+    dsid = nv_segment_index + 1U;
   } else {
-    /** This segment in this cycle was synced! The NV-segment is in next cycle */
-    dsid += wal->segment_count_;
+    const uint32_t synced_cycles = (ondisk_from - 1U) / wal->segment_count_;
+    dsid = synced_cycles * wal->segment_count_ + nv_segment_index + 1U;
+    if (dsid > ondisk_from) {
+      /** This means this segment in this cycle was yet to be synced to disk */
+      assert(dsid < ondisk_from + wal->segment_count_);
+    } else {
+      /** This segment in this cycle was synced! The NV-segment is in next cycle */
+      dsid += wal->segment_count_;
+    }
   }
 
   assert(dsid > 0);
   assert(dsid > ondisk_from);
   assert(((dsid - 1U) % wal->segment_count_) == nv_segment_index);
   segment->dsid_ = dsid;
-  assert(segment->nv_segment_index_ == 0);
   if (segment->dsid_ > wal->flusher_current_nv_segment_dsid_) {
     /* The segment was not used/recycled yet. Nothing to do then */
   } else if (segment->dsid_ == wal->flusher_current_nv_segment_dsid_) {

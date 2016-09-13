@@ -310,7 +310,7 @@ nvwal_error_t nvwal_cursor_next(
 static inline uint8_t nvwal_cursor_is_valid(
   struct NvwalContext* wal,
   struct NvwalLogCursor* cursor) {
-  return (cursor->current_epoch_ != kNvwalInvalidEpoch);
+  return (cursor->cur_segment_data_ != 0);
 }
 
 /**
