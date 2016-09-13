@@ -90,6 +90,8 @@ endfunction()
 #
 #############################################################################
 
+add_nvwal_test_individual(test_nvwal_cursor "NoLog;OneWriterOneEpoch;OneWriterTwoEpochs")
+
 add_nvwal_test_individual(test_nvwal_example "Test1;Test2")
 
 add_nvwal_test_individual(test_nvwal_mds "Init;WriteEpochSingle;WriteEpochOneBatchSmall;WriteEpochOneBatchLarge;WriteEpochTwoBatches;ReadEpochOnePage;ReadEpochTwoPages;Rollback")
