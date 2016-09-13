@@ -532,7 +532,7 @@ nvwal_error_t impl_init_no_error_handling(
   /* Initialize all nv segments */
   for (uint32_t i = 0; i < wal->segment_count_; ++i) {
     struct NvwalLogSegment* segment = wal->segments_ + i;
-    if (wal->prev_config_.libnvwal_version_) {
+    if (wal->durable_epoch_ != kNvwalInvalidEpoch) {
       NVWAL_CHECK_ERROR(init_existing_nvram_segment(wal, i, segment));
     } else {
       NVWAL_CHECK_ERROR(init_fresh_nvram_segment(wal, i, segment));
@@ -691,7 +691,7 @@ nvwal_error_t init_existing_nvram_segment(
   segment->nv_baseaddr_ = mmap(0,
                   wal->config_.segment_size_,
                   PROT_READ | PROT_WRITE,
-                  MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE,
+                  MAP_SHARED | MAP_POPULATE,
                   segment->nv_fd_,
                   0);
 
