@@ -145,7 +145,13 @@ void assure_writer_active_frame(
      */
     if (frame->log_epoch_ == kNvwalInvalidEpoch) {
       /** null active frame means we have no active frame! probably has been idle */
-      assert(writer->active_frame_ == writer->oldest_frame_);
+      /*
+       * assert(writer->active_frame_ == writer->oldest_frame_);
+       * This assertion might NOt hold when flusher is now clearing this frame's epoch.
+       * As done in flusher_copy_one_writer_to_nv(),
+       * it first clears log_epoch_, then set oldest_frame_.
+       * We observed this assertion (falsely) firing 1 in 100 times.
+       */
     } else {
       /** active frame is too old. we move on to next */
       writer->active_frame_ = wrap_writer_epoch_frame(writer->active_frame_ + 1U);
@@ -513,11 +519,8 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
 
     uint64_t new_head = wrap_writer_offset(writer, head + copied_bytes);
     if (new_head == tail && is_stable_epoch) {
-      /** This frame is done! */
-      memset(
-        writer->epoch_frames_ + frame_index,
-        0,
-        sizeof(struct NvwalWriterEpochFrame));
+      /* The order is important here. Must agree with assure_writer_active_frame() */
+      nvwal_atomic_store(&writer->epoch_frames_[frame_index].log_epoch_, kNvwalInvalidEpoch);
       nvwal_atomic_store(&writer->oldest_frame_, wrap_writer_epoch_frame(frame_index + 1));
     } else {
       /** This frame might receive more logs. We just remember the new head */
