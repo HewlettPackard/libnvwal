@@ -72,6 +72,34 @@ TEST(NvwalWriterTest, TwoEpochs) {
   EXPECT_EQ(0, context.uninit_all());
 }
 
+TEST(NvwalWriterTest, ManyEpochsBufferWrapAround) {
+  TestContext context(1, TestContext::kExtremelyTiny);
+  EXPECT_EQ(0, context.init_all());
+
+  auto* resource = context.get_resource(0);
+  auto* wal = &resource->wal_instance_;
+  const uint32_t buffer_size = wal->config_.writer_buffer_size_;
+  auto* buffer = resource->writer_buffers_[0].get();
+  auto* writer = wal->writers_ + 0;
+  const uint32_t kBytes = 128;
+  const uint32_t kReps = 100;
+
+  EXPECT_TRUE(buffer_size % kBytes == 0);  // This simplifies a bit
+  for (int i = 0; i < kReps; ++i) {
+    EXPECT_EQ(1U, nvwal_has_enough_writer_space(writer));
+    const uint32_t offset = (kReps * kBytes) % buffer_size;
+    std::memset(buffer + offset, static_cast<nvwal_byte_t>(i), kBytes);
+    EXPECT_EQ(0, nvwal_on_wal_write(writer, kBytes, i + 1));
+    EXPECT_EQ(0, nvwal_advance_stable_epoch(wal, i + 1));
+    EXPECT_EQ(0, context.wait_until_durable(wal, i + 1));
+    if (i % 10 == 0) {
+      std::cout << i << "/" << kReps << std::endl;
+    }
+  }
+
+  EXPECT_EQ(0, context.uninit_all());
+}
+
 }  // namespace nvwaltest
 
 TEST_MAIN_CAPTURE_SIGNALS(NvwalWriterTest);

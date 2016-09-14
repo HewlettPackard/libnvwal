@@ -60,9 +60,20 @@ class TestContext {
      * \li writer's buffer size : 4 KB
      * \li writers per WAL : 2
      * \li block_seg_size_, nv_seg_size_ : 4 KB
-     * \li nv_quota_ : 1 MB
+     * \li nv_quota_ : 64 KB
      */
     kTiny = 0,
+
+    /**
+     * Use this for testcases that intentionally trigger blocking,
+     * buffer wrap-around, etc.
+     * \li writer's buffer size : 512b
+     * \li writers per WAL : 2
+     * \li block_seg_size_, nv_seg_size_ : 512b
+     * \li nv_quota_ : 2 KB
+     */
+    kExtremelyTiny = 1,
+
     /**In some cases we might need this.. */
     kBig,
   };

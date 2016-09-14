@@ -152,12 +152,11 @@ void assure_writer_active_frame(
       frame = writer->epoch_frames_ + writer->active_frame_;
     }
 
-    /**
-     * Otherwise we caught up on the oldest.
-     * The 5-frames should be enough to prevent this.
+    /*
+     * By writing in the following order, flusher won't pick up this frame
+     * too early. frame->log_epoch_ should be now an irrelevant epoch,
+     * thus until the 3rd line this has no effect.
      */
-    assert(frame->log_epoch_ == kNvwalInvalidEpoch);
-
     nvwal_atomic_store_release(&frame->head_offset_, writer->last_tail_offset_);
     nvwal_atomic_store_release(&frame->tail_offset_, writer->last_tail_offset_);
     nvwal_atomic_store_release(&frame->log_epoch_, log_epoch);
@@ -168,10 +167,16 @@ nvwal_error_t nvwal_on_wal_write(
   struct NvwalWriterContext* writer,
   uint64_t bytes_written,
   nvwal_epoch_t log_epoch) {
-  struct NvwalWriterEpochFrame* frame;
+#ifndef NDEBUG
+  const nvwal_epoch_t se = nvwal_atomic_load(&writer->parent_->stable_epoch_);
+  assert(nvwal_is_epoch_after(log_epoch, se));
+  const nvwal_epoch_t de = nvwal_atomic_load(&writer->parent_->durable_epoch_);
+  const nvwal_epoch_t beyond_horizon = nvwal_add_epoch(se, kNvwalEpochFrameCount);
+  assert(nvwal_is_epoch_after(beyond_horizon, log_epoch));
+#endif  // NDEBUG
 
   assure_writer_active_frame(writer, log_epoch);
-  frame = writer->epoch_frames_ + writer->active_frame_;
+  struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + writer->active_frame_;
   assert(frame->log_epoch_ == log_epoch);
   assert(frame->tail_offset_ == writer->last_tail_offset_);
 
@@ -556,14 +561,14 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   nvwal_atomic_store(&cur_segment->fsync_requested_, 1U);  /** Signal to fsyncer */
 
   /**
-   * Now, we need to recycle this segment. this might involve a wait if
+   * Now, we need to recycle next segment. this might involve a wait if
    * we haven't copied it to disk, or epoch-cursor is now reading from this segment.
    */
   const nvwal_dsid_t next_dsid = wal->flusher_current_nv_segment_dsid_ + 1U;
   struct NvwalLogSegment* new_segment = flusher_get_segment_from_dsid(wal, next_dsid);
-  while (!nvwal_atomic_load_acquire(&new_segment->fsync_completed_)) {
+  while (new_segment->fsync_requested_
+    && !nvwal_atomic_load_acquire(&new_segment->fsync_completed_)) {
     /** Should be rare! not yet copied to disk */
-    assert(new_segment->fsync_requested_);
     sched_yield();
     nvwal_error_t fsync_error = nvwal_atomic_load_acquire(&new_segment->fsync_error_);
     if (fsync_error) {
@@ -634,7 +639,8 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
     for (cur_segment = 0; cur_segment < wal->segment_count_; ++cur_segment) {
       struct NvwalLogSegment* segment = wal->segments_ + cur_segment;
-      if (nvwal_atomic_load_acquire(&(segment->fsync_requested_))) {
+      if (!segment->fsync_completed_
+        && nvwal_atomic_load_acquire(&(segment->fsync_requested_))) {
         error_code = fsyncer_sync_one_segment_to_disk(wal->segments_ + cur_segment);
         if (error_code) {
           break;
@@ -645,6 +651,9 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
       if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
         break;
       }
+    }
+    if (error_code) {
+      break;
     }
   }
   nvwal_impl_thread_state_stopped(thread_state);

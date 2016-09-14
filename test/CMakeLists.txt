@@ -104,4 +104,4 @@ add_nvwal_test_individual(test_nvwal_restart "NoLog;OneWriterOneEpoch;OneWriterT
 
 add_nvwal_test_individual(test_nvwal_util "EpochIncrement;CircularMemcpy;CircularMemcpyWrap;ConcatSequenceFilename;IsNonemptyDir")
 
-add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs")
+add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs;ManyEpochsBufferWrapAround")

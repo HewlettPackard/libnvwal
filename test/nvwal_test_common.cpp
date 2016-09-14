@@ -57,11 +57,26 @@ nvwal_error_t TestContext::init_all() {
 }
 
 nvwal_error_t TestContext::impl_startup(bool create_files) {
-  // TODO(Hideaki) : following must be based on sizing_
-  const uint64_t kWriterBufferSize = 1ULL << 12;
+  uint64_t kWriterBufferSize;
   const uint16_t kWriterCount = 2;
-  const uint32_t kSegSize = 1U << 12;
-  const uint64_t kNvQuota = 1ULL << 16;
+  uint32_t kSegSize;
+  uint64_t kNvQuota;
+
+  switch (sizing_) {
+    case kTiny:
+      kWriterBufferSize = 1ULL << 12;
+      kSegSize = 1U << 12;
+      kNvQuota = 1ULL << 16;
+      break;
+    case kExtremelyTiny:
+      kWriterBufferSize = 1ULL << 9;
+      kSegSize = 1U << 9;
+      kNvQuota = 1ULL << 11;
+      break;
+    default:
+      return EINVAL;
+  }
+
   for (int w = 0; w < wal_count_; ++w) {
     auto* resource = get_resource(w);
     auto* wal = &resource->wal_instance_;
