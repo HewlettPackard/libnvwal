@@ -145,22 +145,9 @@ void assure_writer_active_frame(
      */
     if (frame->log_epoch_ == kNvwalInvalidEpoch) {
       /** null active frame means we have no active frame! probably has been idle */
-      /*
-       * assert(writer->active_frame_ == writer->oldest_frame_);
-       * This assertion might NOt hold when flusher is now clearing this frame's epoch.
-       * As done in flusher_copy_one_writer_to_nv(),
-       * it first clears log_epoch_, then set oldest_frame_.
-       * We observed this assertion (falsely) firing 1 in 100 times.
-       */
     } else {
       /** active frame is too old. we move on to next */
       writer->active_frame_ = wrap_writer_epoch_frame(writer->active_frame_ + 1U);
-      /**
-       * Now active_frame is surely ahead of oldest_frame.
-       * If the assert below fires, this writer was issueing too new epochs,
-       * violating the "upto + 2" contract.
-       */
-      assert(writer->active_frame_ != writer->oldest_frame_);
       frame = writer->epoch_frames_ + writer->active_frame_;
     }
 
@@ -209,16 +196,41 @@ nvwal_error_t nvwal_on_wal_write(
 
 uint8_t nvwal_has_enough_writer_space(
   struct NvwalWriterContext* writer) {
-  uint32_t oldest_frame;
-  uint64_t consumed_bytes;
-  struct NvwalWriterEpochFrame* frame;
+  /*
+   * Check all frames (not many, don't worry!) to see
+   * which regions could be being used.
+   */
+  const nvwal_epoch_t durable
+    = nvwal_atomic_load_acquire(&writer->parent_->durable_epoch_);
+  nvwal_epoch_t beyond_horizon = durable;
+  for (int i = 0; i < kNvwalEpochFrameCount; ++i) {
+    beyond_horizon = nvwal_increment_epoch(beyond_horizon);
+  }
 
-  oldest_frame = nvwal_atomic_load_acquire(&writer->oldest_frame_);
-  frame = writer->epoch_frames_ + oldest_frame;
-  consumed_bytes = calculate_writer_offset_distance(
-    writer,
-    frame->head_offset_,
-    writer->last_tail_offset_);
+  uint64_t consumed_bytes = 0;
+  for (int frame_index = 0;
+        frame_index < kNvwalEpochFrameCount;
+        ++frame_index) {
+    struct NvwalWriterEpochFrame* frame
+      = writer->epoch_frames_ + frame_index;
+    const nvwal_epoch_t frame_epoch
+      = nvwal_atomic_load_acquire(&frame->log_epoch_);
+    if (frame_epoch == kNvwalInvalidEpoch) {
+      /* Simply unused */
+      continue;
+    } else if (nvwal_is_epoch_equal_or_after(durable, frame_epoch)) {
+      /* Everything in DE is completely durable. This frame is in no use */
+      continue;
+    } else if (nvwal_is_epoch_equal_or_after(frame_epoch, beyond_horizon)) {
+      /* This is a remnant of wrap-around */
+      continue;
+    }
+    consumed_bytes += calculate_writer_offset_distance(
+      writer,
+      frame->head_offset_,
+      writer->last_tail_offset_);
+  }
+
   return (consumed_bytes * 2ULL <= writer->parent_->config_.writer_buffer_size_);
 }
 
@@ -463,31 +475,23 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
   /**
    * First, we need to figure out what is the frame of the writer
    * we should copy from.
-   * After this loop, lower_bound_f will be the first frame (from oldest_frame)
-   * whose epoch is not older than target_epoch.
+   * Here we assume that we are writing out only the logs in target_epoch.
+   * All logs before that were already written out.
    */
-  int lower_bound_f;
-  for (lower_bound_f = 0; lower_bound_f < kNvwalEpochFrameCount; ++lower_bound_f) {
-    const int frame_index = writer->oldest_frame_ + lower_bound_f;
+  int frame_index;
+  for (frame_index = 0; frame_index < kNvwalEpochFrameCount; ++frame_index) {
     struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
     nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
-    if (frame_epoch == kNvwalInvalidEpoch
-      || nvwal_is_epoch_equal_or_after(frame_epoch, target_epoch)) {
+    if (frame_epoch == target_epoch) {
       break;
     }
   }
-  if (lower_bound_f == kNvwalEpochFrameCount) {
-    return 0;  /** No frame in target epoch or newer. Probably an idle writer */
+  if (frame_index == kNvwalEpochFrameCount) {
+    return 0;  /** No frame in target epoch. Probably an idle writer */
   }
 
-  const int frame_index = writer->oldest_frame_ + lower_bound_f;
   struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
-  nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
-  if (frame_epoch == kNvwalInvalidEpoch
-    || nvwal_is_epoch_after(frame_epoch, target_epoch)) {
-    return 0;  /** It's too new. Or target_epoch logs don't exist. Skip. */
-  }
-
+  const nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
   assert(target_epoch == frame_epoch);
   const uint64_t segment_size = wal->config_.segment_size_;
   const uint64_t writer_buffer_size = wal->config_.writer_buffer_size_;
@@ -518,15 +522,9 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
       copied_bytes);
 
     uint64_t new_head = wrap_writer_offset(writer, head + copied_bytes);
-    if (new_head == tail && is_stable_epoch) {
-      /* The order is important here. Must agree with assure_writer_active_frame() */
-      nvwal_atomic_store(&writer->epoch_frames_[frame_index].log_epoch_, kNvwalInvalidEpoch);
-      nvwal_atomic_store(&writer->oldest_frame_, wrap_writer_epoch_frame(frame_index + 1));
-    } else {
-      /** This frame might receive more logs. We just remember the new head */
-      /** The store must be in order because nvwal_has_enough_writer_space() depends on it */
-      nvwal_atomic_store_release(&frame->head_offset_, new_head);
-    }
+    /** This frame might receive more logs. We just remember the new head */
+    /** The store must be in order because nvwal_has_enough_writer_space() depends on it */
+    nvwal_atomic_store_release(&frame->head_offset_, new_head);
 
     cur_segment->written_bytes_ += copied_bytes;
     if (cur_segment->written_bytes_ == segment_size) {

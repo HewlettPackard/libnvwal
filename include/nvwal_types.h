@@ -563,14 +563,6 @@ struct NvwalWriterContext {
   struct NvwalWriterEpochFrame epoch_frames_[kNvwalEpochFrameCount];
 
   /**
-   * Points to the oldest frame this writer is aware of.
-   * This variable is written by the flusher only.
-   * When epoch_frames[oldest_frame].log_epoch == kNvwalInvalidEpoch,
-   * it means no frame is currently active.
-   */
-  uint32_t oldest_frame_;
-
-  /**
    * Points to the newest frame this writer is using, which is also the only frame
    * this writer is now putting logs to.
    * This variable is read/written by the writer only.
