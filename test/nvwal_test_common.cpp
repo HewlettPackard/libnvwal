@@ -171,7 +171,9 @@ nvwal_error_t TestContext::wait_until_durable(
 void WalResource::launch_flusher() {
   flusher_ = std::move(std::thread(
     [this](){
+      std::cout << "Flusher starting" << std::endl;
       this->flusher_exit_code_ = nvwal_flusher_main(&this->wal_instance_);
+      std::cout << "Flusher stopped" << std::endl;
     }
   ));
   nvwal_wait_for_flusher_start(&wal_instance_);
@@ -180,7 +182,9 @@ void WalResource::launch_flusher() {
 void WalResource::launch_fsyncer() {
   fsyncer_ = std::move(std::thread(
     [this](){
+      std::cout << "Fsyncer starting" << std::endl;
       this->fsyncer_exit_code_ = nvwal_fsync_main(&this->wal_instance_);
+      std::cout << "Fsyncer stopped" << std::endl;
     }
   ));
   nvwal_wait_for_fsync_start(&wal_instance_);
@@ -188,13 +192,17 @@ void WalResource::launch_fsyncer() {
 
 void WalResource::join_flusher() {
   if (flusher_.joinable()) {
+    std::cout << "Flusher joining.." << std::endl;
     flusher_.join();
+    std::cout << "Flusher joined." << std::endl;
   }
 }
 
 void WalResource::join_fsyncer() {
   if (fsyncer_.joinable()) {
+    std::cout << "Fsyncer joining.." << std::endl;
     fsyncer_.join();
+    std::cout << "Fsyncer joined." << std::endl;
   }
 }
 
