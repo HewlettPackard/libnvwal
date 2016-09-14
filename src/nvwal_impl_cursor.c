@@ -28,9 +28,10 @@
 
 #include "nvwal_api.h"
 #include "nvwal_atomics.h"
+#include "nvwal_impl_pin.h"
 #include "nvwal_mds.h"
-#include "nvwal_util.h"
 #include "nvwal_mds_types.h"
+#include "nvwal_util.h"
 
 nvwal_error_t nvwal_open_log_cursor(
   struct NvwalContext* wal,
@@ -91,39 +92,56 @@ nvwal_error_t cursor_open_segment(
 
   NVWAL_CHECK_ERROR(cursor_close_cur_segment(cursor));
 
-  const nvwal_dsid_t synced_dsid =
-    nvwal_atomic_load(&wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
-  if (synced_dsid != kNvwalInvalidDsid && dsid >= synced_dsid) {
-    /* The segment is on disk! */
-    char path[kNvwalMaxPathLength];
-    nvwal_construct_disk_segment_path(wal, dsid, path);
-    cursor->cur_segment_disk_fd_ = open(path, O_RDONLY, 0);
-    assert(cursor->cur_segment_disk_fd_);
-    if (cursor->cur_segment_disk_fd_ == -1) {
-      assert(errno);
-      return errno;
+  /* retry loop for a (rare) change-while-lock case */
+  while (1) {
+    const nvwal_dsid_t synced_dsid =
+      nvwal_atomic_load(&wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
+    if (synced_dsid != kNvwalInvalidDsid && dsid >= synced_dsid) {
+      /* The segment is on disk! */
+      char path[kNvwalMaxPathLength];
+      nvwal_construct_disk_segment_path(wal, dsid, path);
+      cursor->cur_segment_disk_fd_ = open(path, O_RDONLY, 0);
+      assert(cursor->cur_segment_disk_fd_);
+      if (cursor->cur_segment_disk_fd_ == -1) {
+        assert(errno);
+        return errno;
+      }
+
+      cursor->cur_segment_data_ = mmap(
+        0,
+        wal->config_.segment_size_,
+        PROT_READ,
+        MAP_SHARED,
+        cursor->cur_segment_disk_fd_,
+        0);
+      if (cursor->cur_segment_data_ == MAP_FAILED) {
+        assert(errno);
+        return errno;
+      }
+    } else {
+      /* The segment is still on NV */
+      const uint32_t nv_segment_index = (dsid - 1U) % wal->segment_count_;
+      struct NvwalLogSegment* nv_segment = wal->segments_ + nv_segment_index;
+
+      /* Pin it. This might involve a wait */
+      nvwal_pin_read_unconditional_lock(&nv_segment->nv_reader_pins_);
+
+      const nvwal_dsid_t synced_dsid_after =
+        nvwal_atomic_load(&wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
+      if (synced_dsid != synced_dsid_after) {
+        /* Something has been synced while waiting. Are we affected? */
+        if (nv_segment->dsid_ != dsid) {
+          nvwal_pin_read_unlock(&nv_segment->nv_reader_pins_);
+          continue;  /* retry */
+        }
+      }
+
+      assert(nv_segment->dsid_ == dsid);
+      cursor->cur_segment_data_ = nv_segment->nv_baseaddr_;
+      cursor->cur_segment_from_nv_segment_ = 1;
     }
 
-    cursor->cur_segment_data_ = mmap(
-      0,
-      wal->config_.segment_size_,
-      PROT_READ,
-      MAP_SHARED,
-      cursor->cur_segment_disk_fd_,
-      0);
-    if (cursor->cur_segment_data_ == MAP_FAILED) {
-      assert(errno);
-      return errno;
-    }
-  } else {
-    /* The segment is still on NV */
-    const uint32_t nv_segment_index = (dsid - 1U) % wal->segment_count_;
-
-    /* TODO safely pin it here */
-    struct NvwalLogSegment* nv_segment = wal->segments_ + nv_segment_index;
-    assert(nv_segment->dsid_ == dsid);
-    cursor->cur_segment_data_ = nv_segment->nv_baseaddr_;
-    cursor->cur_segment_from_nv_segment_ = 1;
+    break;
   }
 
   cursor->cur_segment_id_ = dsid;
@@ -139,7 +157,11 @@ nvwal_error_t cursor_close_cur_segment(
     assert(cursor->cur_segment_disk_fd_ == 0);
     cursor->cur_segment_data_ = 0;
     cursor->cur_segment_disk_fd_ = 0;
-    /* TODO unpin it here */
+    /* unpin it */
+    const uint32_t nv_segment_index
+      = (cursor->cur_segment_id_ - 1U) % cursor->wal_->segment_count_;
+    struct NvwalLogSegment* nv_segment = cursor->wal_->segments_ + nv_segment_index;
+    nvwal_pin_read_unlock(&nv_segment->nv_reader_pins_);
     cursor->cur_segment_from_nv_segment_ = 0;
   } else {
     if (cursor->cur_segment_data_ && cursor->cur_segment_data_ != MAP_FAILED) {
@@ -168,11 +190,7 @@ nvwal_error_t cursor_fetch_epoch_metadata(
   nvwal_epoch_t from_epoch) {
   assert(from_epoch != kNvwalInvalidEpoch);
 
-  nvwal_epoch_t to_epoch = from_epoch + kNvwalCursorEpochPrefetches;
-  if (to_epoch < from_epoch) {
-    /* Wrap-around happened. We skip zero (kInvalid) */
-    to_epoch += 1;
-  }
+  nvwal_epoch_t to_epoch = nvwal_add_epoch(from_epoch, kNvwalCursorEpochPrefetches);
   if (nvwal_is_epoch_after(to_epoch, cursor->end_epoch_)) {
     to_epoch = cursor->end_epoch_;
   }
@@ -262,7 +280,7 @@ nvwal_error_t nvwal_cursor_next(
     }
 
     meta = cursor->fetched_epochs_ + cursor->fetched_epochs_current_;
-    assert(nvwal_is_epoch_equal_or_after(meta->epoch_, cursor->current_epoch_));
+    assert(meta->epoch_ == cursor->current_epoch_);
     cursor->cur_offset_ = meta->start_offset_;
   } else {
     /* Case 2) This involves close/open of the segment file */

@@ -32,6 +32,7 @@
 
 #include "nvwal_atomics.h"
 #include "nvwal_impl_init.h"
+#include "nvwal_impl_pin.h"
 #include "nvwal_mds.h"
 #include "nvwal_util.h"
 #include "nvwal_mds_types.h"
@@ -202,10 +203,8 @@ uint8_t nvwal_has_enough_writer_space(
    */
   const nvwal_epoch_t durable
     = nvwal_atomic_load_acquire(&writer->parent_->durable_epoch_);
-  nvwal_epoch_t beyond_horizon = durable;
-  for (int i = 0; i < kNvwalEpochFrameCount; ++i) {
-    beyond_horizon = nvwal_increment_epoch(beyond_horizon);
-  }
+  const nvwal_epoch_t beyond_horizon
+    = nvwal_add_epoch(durable, kNvwalEpochFrameCount);
 
   uint64_t consumed_bytes = 0;
   for (int frame_index = 0;
@@ -228,7 +227,7 @@ uint8_t nvwal_has_enough_writer_space(
     consumed_bytes += calculate_writer_offset_distance(
       writer,
       frame->head_offset_,
-      writer->last_tail_offset_);
+      frame->tail_offset_);
   }
 
   return (consumed_bytes * 2ULL <= writer->parent_->config_.writer_buffer_size_);
@@ -574,18 +573,7 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   }
 
   /** Wait while any epoch-cursor is now reading from this */
-  while (1) {
-    int32_t expected = 0;
-    if (nvwal_atomic_compare_exchange_weak(
-      &new_segment->nv_reader_pins_,
-      &expected,
-      -1)) {
-      assert(expected == 0);
-      break;
-    }
-    assert(expected > 0);
-    sched_yield();
-  }
+  nvwal_pin_flusher_unconditional_lock(&new_segment->nv_reader_pins_);
 
   /** Ok, let's recycle */
   assert(new_segment->dsid_ > 0);
@@ -597,8 +585,7 @@ nvwal_error_t flusher_move_onto_next_nv_segment(
   new_segment->fsync_error_ = 0;
   new_segment->fsync_requested_ = 0;
 
-  assert(new_segment->nv_reader_pins_ == -1);
-  nvwal_atomic_store(&new_segment->nv_reader_pins_, 0);
+  nvwal_pin_flusher_unlock(&new_segment->nv_reader_pins_);
 
   /** No need to be atomic. only flusher reads/writes it */
   wal->flusher_current_nv_segment_dsid_ = next_dsid;

@@ -138,7 +138,15 @@ uint8_t nvwal_is_nonempty_dir(const char* path);
 /**
  * Used to retain the last-observed error.
  */
-nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code);
+static inline nvwal_error_t nvwal_stock_error_code(
+  nvwal_error_t cur_code,
+  nvwal_error_t new_code) {
+  if (new_code) {
+    return new_code;
+  } else {
+    return cur_code;
+  }
+}
 
 /**
  * Circular-buffer-aware memcpy.

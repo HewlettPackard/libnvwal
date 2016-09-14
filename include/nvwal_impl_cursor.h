@@ -28,6 +28,10 @@
 #include "nvwal_fwd.h"
 #include "nvwal_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif  /* __cplusplus */
+
 struct MdsEpochMetadata;
 
 /**
@@ -53,6 +57,9 @@ nvwal_error_t cursor_fetch_epoch_metadata(
 /* sub routine of nvwal_open_log_cursor */
 nvwal_error_t cursor_next_initial(struct NvwalLogCursor* cursor);
 
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
 
 /** @} */
 

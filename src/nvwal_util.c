@@ -56,15 +56,6 @@ void nvwal_output_warning_cstr(const char* message, const char* param) {
   fprintf(stdout, message, param);
 }
 
-
-nvwal_error_t nvwal_stock_error_code(nvwal_error_t cur_code, nvwal_error_t new_code) {
-  if (new_code) {
-    return new_code;
-  } else {
-    return cur_code;
-  }
-}
-
 void nvwal_concat_sequence_filename(
   const char* folder,
   const char* file_prefix,

@@ -586,13 +586,6 @@ struct NvwalWriterContext {
    */
   uint64_t last_tail_offset_;
 
-  /**
-    * Everything up to this point has been copied by the flusher thread but
-    * might not yet be durable.
-    * Pending work is everything between copied and writer->complete.
-    */
-  uint64_t copied_offset_;
-
   /** Shorthand for parent->config.writer_buffers[writer_seq_id] */
   nvwal_byte_t* buffer_;
 };

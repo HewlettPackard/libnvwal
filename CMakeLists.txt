@@ -74,6 +74,7 @@ set(WAL_SOURCE_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_api.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_impl_cursor.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_impl_init.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_impl_pin.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_mds.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/nvwal_util.c
   )

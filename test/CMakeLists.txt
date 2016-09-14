@@ -98,6 +98,8 @@ add_nvwal_test_individual(test_nvwal_mds "Init;WriteEpochSingle;WriteEpochOneBat
 
 add_nvwal_test_individual(test_nvwal_mds_io "Init;AppendPage")
 
+add_nvwal_test_individual(test_nvwal_pin "NoContention;OneFlusherOneReader;OneFlusherTwoReaders;OneFlusherFourReaders;TwoFlushersOneReader;TwoFlushersTwoReaders;TwoFlushersFourReaders")
+
 add_nvwal_test_individual(test_nvwal_restart "NoLog;OneWriterOneEpoch;OneWriterTwoEpochs")
 
 add_nvwal_test_individual(test_nvwal_util "EpochIncrement;CircularMemcpy;CircularMemcpyWrap;ConcatSequenceFilename;IsNonemptyDir")

@@ -249,6 +249,22 @@ static inline nvwal_epoch_t nvwal_increment_epoch(nvwal_epoch_t epoch) {
 }
 
 /**
+ * @returns epoch+operand in wrap-around-aware fashion.
+ * @details
+ * Do NOT use straightforward "epoch+=". We must skip kNvwalInvalidEpoch on wrap-around.
+ * This method is equivalent to call nvwal_increment_epoch() operand times.
+ */
+static inline nvwal_epoch_t nvwal_add_epoch(nvwal_epoch_t epoch, uint64_t operand) {
+  nvwal_epoch_t ret = epoch + operand;
+  if (ret < epoch) {
+    /* Wrapped around */
+    return ret + 1ULL;
+  } else {
+    return ret;
+  }
+}
+
+/**
  * @brief Opens a cursor to read durable logs and makes it ready to return
  * logs in the first epoch.
  * @param[in] wal WAL stream to read from
