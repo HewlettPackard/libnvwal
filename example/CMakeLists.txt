@@ -11,5 +11,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 # When you don't want to have these dependencies, skip the whole test folder (-DNO_NVWAL_TEST)
 find_package(Boost 1.36.0 REQUIRED COMPONENTS filesystem system)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
+include_directories(SYSTEM
+  ${Boost_INCLUDE_DIRS}
+  ${NVWAL_BIN_ROOT}/third_party/gflags-2.1.1/include
+  )
 
+set(EXAMPLE_DEPENDENCIES
+  nvwal-shared
+  ${CMAKE_THREAD_LIBS_INIT}
+  ${Boost_LIBRARIES}
+  gflags-static)
+
+add_executable(get_started ${CMAKE_CURRENT_SOURCE_DIR}/get_started.cpp)
+target_link_libraries(get_started ${EXAMPLE_DEPENDENCIES})

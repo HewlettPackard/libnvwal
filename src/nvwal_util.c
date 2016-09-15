@@ -210,7 +210,6 @@ nvwal_error_t nvwal_remove_all_under(const char* path) {
           continue;
         }
 
-        /** Recurse... */
         const uint32_t child_len
           = strnlen(ent->d_name, kNvwalMaxPathLength);
         if (path_len + 1 + child_len > kNvwalMaxPathLength) {
@@ -219,8 +218,16 @@ nvwal_error_t nvwal_remove_all_under(const char* path) {
         }
         memcpy(child_path + path_len + 1, ent->d_name, child_len);
         child_path[path_len + 1 + child_len] = '\0';
-        ret = nvwal_remove_all_under(child_path);
-        if (ret) {
+        if (ent->d_type == DT_DIR) {
+          /** Recurse... */
+          ret = nvwal_remove_all_under(child_path);
+          if (ret) {
+            break;
+          }
+        }
+
+        if (remove(child_path)) {
+          ret = errno;
           break;
         }
       } else {

@@ -557,10 +557,12 @@ static nvwal_error_t unmap_nvram_buffer_file(
 {
   nvwal_error_t ret;
 
-  ret = munmap(nv_baseaddr, bufmgr->wal_->config_.mds_page_size_);
-  if (ret != 0) {
-    ret = errno;
-    goto error_return;
+  if (nv_baseaddr && nv_baseaddr != MAP_FAILED) {
+    ret = munmap(nv_baseaddr, bufmgr->wal_->config_.mds_page_size_);
+    if (ret != 0) {
+      ret = errno;
+      goto error_return;
+    }
   }
   return 0;
 
