@@ -21,6 +21,7 @@
 #include "nvwal_test_common.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <iostream>
 #include <thread>
 #include <vector>
