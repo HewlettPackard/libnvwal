@@ -76,7 +76,8 @@ private:
         while (!nvwal_has_enough_writer_space(writer)) { /* spin */ }
 
         /* write some bytes into log buffer */
-        /* randomly generated junk with random length? */     
+        /* randomly generated junk with random length? */    
+        bytes_written = 100; /* do randr() or something later */ 
         memcpy((char *)(writer->buffer_), buf, bytes_written);
         /* update last_tail_offset_ */
         epoch_frame->tail_offset_ += bytes_written;
@@ -117,7 +118,6 @@ public:
   {
     memset(&config_, 0, sizeof(config_));
     memset(&wal_, 0, sizeof(wal_));
-    //max_epoch_ = XXX;
   }
 
   ~NvwalMicrobenchmark()
@@ -180,12 +180,15 @@ public:
     nvwal_wait_for_flusher_start(&wal_);
     nvwal_wait_for_fsync_start(&wal_);
 
+    printf("Launched flusher and syncer threads\n");
+
     for (int i = 0; i < config_.writer_count_; i++)
     {
       workers[i] = std::thread([this, i](){this->do_logging(&w_context_[i]);});
     }
 
     /* Everyone else is working now. Increment the epoch counter periodically. */
+    printf("Launched writer threads\n");
     do
     {
       nanosleep(&epoch_interval_, NULL);
@@ -193,12 +196,16 @@ public:
       nvwal_advance_stable_epoch(&wal_, current_global_epoch_);
     } while (current_global_epoch_ <= max_epoch_);
 
-    for (int i = 0; i < num_threads; i++)
+    printf("Joining writer threads\n");
+    for (int i = 0; i < config_.writer_count_; i++)
     {
       if (workers[i].joinable()) {workers[i].join();}
     }
 
     nvwal_uninit(&wal_);
+
+    if (workers[num_threads-1].joinable()) {workers[num_threads-1].join();}
+    if (workers[num_threads-2].joinable()) {workers[num_threads-2].join();}
 
     for (int i = 0; i < config_.writer_count_; i++)
     {
