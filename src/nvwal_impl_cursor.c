@@ -96,7 +96,7 @@ nvwal_error_t cursor_open_segment(
   while (1) {
     const nvwal_dsid_t synced_dsid =
       nvwal_atomic_load(&wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
-    if (synced_dsid != kNvwalInvalidDsid && dsid >= synced_dsid) {
+    if (synced_dsid != kNvwalInvalidDsid && dsid <= synced_dsid) {
       /* The segment is on disk! */
       char path[kNvwalMaxPathLength];
       nvwal_construct_disk_segment_path(wal, dsid, path);
@@ -286,6 +286,16 @@ nvwal_error_t nvwal_cursor_next(
     /* Case 2) This involves close/open of the segment file */
     NVWAL_CHECK_ERROR(cursor_open_segment(cursor, cursor->cur_segment_id_ + 1U));
     cursor->cur_offset_ = 0;
+    if (meta->end_offset_ == 0) {
+      /*
+       * This is possible when an epoch [un]luckily ends at exactly the end of segment.
+       * It is a bit weird to return "0-bytes" region in this case,
+       * so we automatically invoke next() again, which would move on to next epoch
+       * or end this cursor.
+       */
+      cursor->cur_len_ = 0;
+      return nvwal_cursor_next(wal, cursor);
+    }
   }
 
   if (meta->last_dsid_ != cursor->cur_segment_id_) {

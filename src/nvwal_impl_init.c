@@ -508,7 +508,10 @@ nvwal_error_t impl_init_no_error_handling(
   }
 
   /* Initialize Metadata Store */
-  NVWAL_CHECK_ERROR(mds_init(mode, wal));
+  /* TODO So far mds_init() assumes kNvwalInitCreateTruncate is converted into NotExists */
+  enum NvwalInitMode converted_mode
+    = mode == kNvwalInitCreateTruncate ? kNvwalInitCreateIfNotExists : mode;
+  NVWAL_CHECK_ERROR(mds_init(converted_mode, wal));
 
   /* Determine flusher's state as of the previous shutdown using MDS */
   if (wal->durable_epoch_ == kNvwalInvalidEpoch) {
