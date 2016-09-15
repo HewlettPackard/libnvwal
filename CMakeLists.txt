@@ -84,13 +84,14 @@ add_library(nvwal-shared SHARED ${WAL_SOURCE_FILES})
 target_link_libraries(nvwal-static ${CMAKE_THREAD_LIBS_INIT} ${PMEM_LIBRARY})
 target_link_libraries(nvwal-shared ${CMAKE_THREAD_LIBS_INIT} ${PMEM_LIBRARY})
 
-# Unit tests. If you give -DNO_NVWAL_TEST, we skip the following.
+# Unit tests and examples. If you give -DNO_NVWAL_TEST, we skip the following.
 # This is useful for a production environment to quickly build libnvwal
 # without additional dependencies for test.
 # Other than those cases, we recommend building/running testcases always.
 if(NO_NVWAL_TEST)
   message(STATUS "NO_NVWAL_TEST was specified all testcases and their dependencies skipped")
 else(NO_NVWAL_TEST)
+  add_subdirectory(example)
   add_subdirectory(test)
   add_subdirectory(third_party) # all of them are just for test
 endif(NO_NVWAL_TEST)
@@ -108,6 +109,7 @@ if(DOXYGEN_FOUND)
   set(DOXYGEN_TARGETS "${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src")
 
   set(DOXYGEN_MAINPAGE_MARKDOWN "README.md")
+  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/README.md ${CMAKE_CURRENT_BINARY_DIR}/README.md COPYONLY)
 
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY)
   add_custom_target(dox
