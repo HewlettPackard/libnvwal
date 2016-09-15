@@ -18,12 +18,14 @@
 
 #include <iostream>
 #include <time.h>
-
+#include <string.h>
+#include <thread>
 #include "nvwal_api.h"
 #include "nvwal_types.h"
 
-#if 0
+namespace nvwaltest {
 const int max_args = 11;
+char const alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 class NvwalMicrobenchmark
 {
@@ -39,7 +41,6 @@ private:
   nvwal_epoch_t current_global_epoch_;
   nvwal_epoch_t max_epoch_;
 
-  static char const alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
   void generate_random_buffer(char *buf, size_t const len)
   {
@@ -52,15 +53,15 @@ private:
   int do_logging(struct NvwalWriterContext * writer)
   {
     nvwal_error_t rc;
-    char buf[max_logrec_size];
-    generate_random_buffer(buf, max_logrec_size);
+    char buf[max_logrec_size_];
+    generate_random_buffer(buf, max_logrec_size_);
 
     size_t bytes_written = 0;
     nvwal_epoch_t current_epoch;
     writer->active_frame_ = 0;
-    struct NvwalWriterEpochFrame * epoch_frame = writer->epoch_frames_[writer->active_frame_];
-    epoch_frame_->head_offset_ = 0;
-    epoch_frame_->tail_offset_ = 0;
+    struct NvwalWriterEpochFrame * epoch_frame = &(writer->epoch_frames_[writer->active_frame_]);
+    epoch_frame->head_offset_ = 0;
+    epoch_frame->tail_offset_ = 0;
     rc = nvwal_query_durable_epoch(writer->parent_, &current_epoch);
     current_epoch = nvwal_increment_epoch(current_epoch);
     epoch_frame->log_epoch_ = current_epoch;
@@ -81,28 +82,28 @@ private:
         epoch_frame->tail_offset_ += bytes_written;
         writer->last_tail_offset_ = epoch_frame->tail_offset_;
 
-        rc = nvwal_on_wal_write(writer, bytes_written, current_epoch_);
+        rc = nvwal_on_wal_write(writer, bytes_written, current_epoch);
 
         /* need to catch up to global epoch? */
-       if (current_epoch < current_global_epoch)
+       if (current_epoch < current_global_epoch_)
        {
-         current_epoch = current_global_epoch;
+         current_epoch = current_global_epoch_;
        }
 
-        nanosleep(write_interval_);
+        nanosleep(&write_interval_, NULL);
       } while (1);
 
       /* done with this frame. set up a new one. */
       writer->active_frame_++;
-      writer->active_frame %= kNvwalEpochFrameCount;
-      epoch_frame = writer->epoch_frames_[writer->active_frame_];
+      writer->active_frame_ %= kNvwalEpochFrameCount;
+      epoch_frame = &(writer->epoch_frames_[writer->active_frame_]);
       epoch_frame->head_offset_ = writer->last_tail_offset_;
       epoch_frame->tail_offset_ = writer->last_tail_offset_;
       current_epoch = nvwal_increment_epoch(current_epoch);
       epoch_frame->log_epoch_ = current_epoch;
 
       /* exit condition? */
-      if (current_epoch > max_epoch) { break; }
+      if (current_epoch > max_epoch_) { break; }
 
 
     } while(1);
@@ -115,7 +116,7 @@ public:
   NvwalMicrobenchmark()
   {
     memset(&config_, 0, sizeof(config_));
-    memset(&wal_, 0 sizeof(wal_));
+    memset(&wal_, 0, sizeof(wal_));
     //max_epoch_ = XXX;
   }
 
@@ -124,33 +125,33 @@ public:
 
   }
 
-  inline set_nv_root(char * root_) { strcpy(&(config_.nv_root_), root_); }
+  inline void set_nv_root(char * root_) { strcpy(config_.nv_root_, root_); }
 
-  inline set_disk_root(char *root_) { strcpy(&(config_.disk_root_), root_); }
+  inline void set_disk_root(char *root_) { strcpy(config_.disk_root_, root_); }
 
-  inline set_writer_count(uint32_t num_writers_) { config_.writer_count_ = num_writers_; }
+  inline void set_writer_count(uint32_t num_writers_) { config_.writer_count_ = num_writers_; }
 
-  inline set_segment_size(uint64_t seg_size_) { config_.segment_size_ = seg_size_; }
+  inline void set_segment_size(uint64_t seg_size_) { config_.segment_size_ = seg_size_; }
 
-  inline set_nv_quota(uint64_t quota_) { config_.nv_quota_ = quota_; }
+  inline void set_nv_quota(uint64_t quota_) { config_.nv_quota_ = quota_; }
 
-  inline set_writer_buffer_size(uint64_t buf_size_) { config_.writer_buffer_size_ = buf_size_; }
+  inline void set_writer_buffer_size(uint64_t buf_size_) { config_.writer_buffer_size_ = buf_size_; }
 
-  inline set_mds_page_size(uint64_t pg_size_) { config_.mds_page_size_ = pg_size_; }
+  inline void set_mds_page_size(uint64_t pg_size_) { config_.mds_page_size_ = pg_size_; }
 
-  inline set_epoch_interval(uint64_t nanosecs_) 
+  inline void set_epoch_interval(uint64_t nanosecs_) 
   {
     epoch_interval_.tv_sec = nanosecs_/1000000000;
-    epoch_interval_.tv_nsec = nanosecs - epoch_interval_.tv_sec*1000000000;
+    epoch_interval_.tv_nsec = nanosecs_ - epoch_interval_.tv_sec*1000000000;
   }
   
-  inline set_write_interval(uint64_t nanosecs_) 
+  inline void set_write_interval(uint64_t nanosecs_) 
   {
     write_interval_.tv_sec = nanosecs_/1000000000;
-    write_interval_.tv_nsec = nanosecs - epoch_interval_.tv_sec*1000000000;
+    write_interval_.tv_nsec = nanosecs_ - epoch_interval_.tv_sec*1000000000;
   }
 
-  inline set_max_epoch(nvwal_epoch_t max_) { max_epoch_ = max_; }
+  inline void set_max_epoch(nvwal_epoch_t max_) { max_epoch_ = max_; }
 
 
   int run_test()
@@ -162,7 +163,7 @@ public:
     w_context_ = (struct NvwalWriterContext *)malloc(sizeof(struct NvwalWriterContext)*config_.writer_count_);
     std::thread workers[num_threads];
 
-    for (int i = 0; i < config_writer_count_; i++)
+    for (int i = 0; i < config_.writer_count_; i++)
     {
       config_.writer_buffers_[i] = (nvwal_byte_t *)malloc(config_.writer_buffer_size_);
     }
@@ -172,25 +173,25 @@ public:
 
     }
 
-    
+    printf("Finished Nvwal Init\n"); 
 
-    workers[num_threads-2] = std::thread([this]{nvwal_flusher_main(&wal_)});
-    workers[num_threads-1] = std::thread([this]{this->nvwal_fsync_main(&wal_)});
+    workers[num_threads-2] = std::thread([this]{nvwal_flusher_main(&wal_);});
+    workers[num_threads-1] = std::thread([this]{nvwal_fsync_main(&wal_);});
     nvwal_wait_for_flusher_start(&wal_);
-    nvwal_wait_for_syncer_start(&wal_);
+    nvwal_wait_for_fsync_start(&wal_);
 
-    for (int i = 0; i < config_.writer_count_)
+    for (int i = 0; i < config_.writer_count_; i++)
     {
-      workers[i] = std::thread([this, i](){this->do_logging(w_context_[i]);});
+      workers[i] = std::thread([this, i](){this->do_logging(&w_context_[i]);});
     }
 
     /* Everyone else is working now. Increment the epoch counter periodically. */
     do
     {
-      nanosleep(epoch_interval_, NULL);
-      current_global_epoch = nvwal_increment_epoch(current_global_epoch);
-      nvwal_advance_stable_epoch(&wal_, current_global_epoch);
-    } while (current_global_epoch <= max_epoch);
+      nanosleep(&epoch_interval_, NULL);
+      current_global_epoch_ = nvwal_increment_epoch(current_global_epoch_);
+      nvwal_advance_stable_epoch(&wal_, current_global_epoch_);
+    } while (current_global_epoch_ <= max_epoch_);
 
     for (int i = 0; i < num_threads; i++)
     {
@@ -199,14 +200,14 @@ public:
 
     nvwal_uninit(&wal_);
 
-    for (int i = 0; i < config_writer_count_; i++)
+    for (int i = 0; i < config_.writer_count_; i++)
     {
       free(config_.writer_buffers_[i]);
     }
   }
 
 };
-
+}
 void usage()
 {
   printf("test_nvwal_microbench nv_root disk_root writer_count segment_size nv_quota writer_buffer_size mds_page_size epoch_interval write_interval max_epoch\n");
@@ -215,7 +216,7 @@ void usage()
 
 int main(int argc, char *argv[])
 {
-  if (max_args != argc)
+  if (nvwaltest::max_args != argc)
   {
     usage();
     return -1;
@@ -230,34 +231,35 @@ int main(int argc, char *argv[])
     //config_.writer_buffers_
     //config_.mds_page_size_) //has default value
 
-  NvwalMicrobenchmark mb();
+  nvwaltest::NvwalMicrobenchmark mb;
 
-  mb.set_nv_root();
-  mb.set_disk_root();
-  mb.set_writer_count();
-  if ((0 != atoi(argv[])) && (0 == atoi(argv[])%512))
+  mb.set_nv_root(argv[1]);
+  mb.set_disk_root(argv[2]);
+  mb.set_writer_count(atoi(argv[3]));
+  if ((0 != atoi(argv[4])) && (0 == atoi(argv[4])%512))
   {
-    mb.set_segment_size();
+    mb.set_segment_size(atoi(argv[4]));
   } else
   {
     printf("Using default segment size\n");
   }
-  mb.set_nv_quota();
-  mb.set_writer_buffer_size();
-  if ((0 != atoi(argv[])) && (0 == atoi(argv[])%512))
+  mb.set_nv_quota(atoi(argv[5]));
+  mb.set_writer_buffer_size(atoi(argv[6]));
+  if ((0 != atoi(argv[7])) && (0 == atoi(argv[7])%512))
   {
-    mb.set_mds_page_size();
+    mb.set_mds_page_size(atoi(argv[7]));
   } else
   {
     printf("Using default MDS page size\n");
   }
-  mb.set_epoch_interval();
-  mb.set_write_interval();
-  mb.set_max_epoch();
+  mb.set_epoch_interval(atoi(argv[8]));
+  mb.set_write_interval(atoi(argv[9]));
+  mb.set_max_epoch(atoi(argv[10]));
 
   mb.run_test();
 
   return 0;
 
 }
-#endif
+
+

@@ -105,3 +105,7 @@ add_nvwal_test_individual(test_nvwal_restart "NoLog;OneWriterOneEpoch;OneWriterT
 add_nvwal_test_individual(test_nvwal_util "EpochIncrement;CircularMemcpy;CircularMemcpyWrap;ConcatSequenceFilename;IsNonemptyDir")
 
 add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs;ManyEpochsBufferWrapAround;TwoWritersSingleThread;TwoWritersConcurrent")
+
+add_executable(test_nvwal_microbenchmark ${CMAKE_CURRENT_SOURCE_DIR}/test_nvwal_microbench.cpp)
+target_link_libraries(test_nvwal_microbenchmark nvwal-shared)
+
