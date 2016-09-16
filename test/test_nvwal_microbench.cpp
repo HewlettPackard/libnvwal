@@ -34,7 +34,6 @@ private:
 
   struct NvwalConfig config_;
   struct NvwalContext wal_;
-  struct NvwalWriterContext * w_context_;
   struct timespec epoch_interval_;
   struct timespec write_interval_;
   uint64_t max_logrec_size_;
@@ -160,7 +159,6 @@ public:
     srand(time(NULL));
 
     int num_threads = config_.writer_count_ + 2;
-    w_context_ = (struct NvwalWriterContext *)malloc(sizeof(struct NvwalWriterContext)*config_.writer_count_);
     std::thread workers[num_threads];
 
     for (int i = 0; i < config_.writer_count_; i++)
@@ -184,7 +182,7 @@ public:
 
     for (int i = 0; i < config_.writer_count_; i++)
     {
-      workers[i] = std::thread([this, i](){this->do_logging(&w_context_[i]);});
+      workers[i] = std::thread([this, i](){this->do_logging(&(wal_.writers_[i]));});
     }
 
     /* Everyone else is working now. Increment the epoch counter periodically. */
