@@ -170,7 +170,6 @@ nvwal_error_t nvwal_on_wal_write(
 #ifndef NDEBUG
   const nvwal_epoch_t se = nvwal_atomic_load(&writer->parent_->stable_epoch_);
   assert(nvwal_is_epoch_after(log_epoch, se));
-  const nvwal_epoch_t de = nvwal_atomic_load(&writer->parent_->durable_epoch_);
   const nvwal_epoch_t beyond_horizon = nvwal_add_epoch(se, kNvwalEpochFrameCount);
   assert(nvwal_is_epoch_after(beyond_horizon, log_epoch));
 #endif  // NDEBUG
