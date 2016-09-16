@@ -665,8 +665,6 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
   assert(segment->dsid_);
   assert(!segment->fsync_completed_);
   nvwal_error_t ret = 0;
-  uint64_t total_writen = 0;
-  uint64_t written = 0;
   segment->fsync_error_ = 0;
   char disk_path[kNvwalMaxPathLength];
   nvwal_construct_disk_segment_path(
@@ -674,7 +672,13 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
     segment->dsid_,
     disk_path);
 
-  int disk_fd = nvwal_open_best_effort_o_direct(
+  /*
+   * Issue #15
+   * This should work, but on our ProLiant box we had to
+   * remove O_DIRECT. This just affects performance,
+   * not correctness as we anyway do fsync.
+   */
+  int disk_fd = open(  /* nvwal_open_best_effort_o_direct( */
     disk_path,
     O_CREAT | O_RDWR,
     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
@@ -685,19 +689,19 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
     goto error_return;
   }
 
-  total_writen = 0;
+  uint64_t total_written = 0;
   /** Be aware of the case where write() doesn't finish in one call */
-  while (total_writen < segment->parent_->config_.segment_size_) {
-    written = write(
+  while (total_written < segment->parent_->config_.segment_size_) {
+    uint64_t written = write(
       disk_fd,
-      segment->nv_baseaddr_ + total_writen,
-      segment->parent_->config_.segment_size_ - total_writen);
+      segment->nv_baseaddr_ + total_written,
+      segment->parent_->config_.segment_size_ - total_written);
     if (written == -1) {
       /** Probably full disk? */
       ret = errno;
       goto error_return;
     }
-    total_writen += written;
+    total_written += written;
 
     /** Is this fsyncher cancelled for some reason? */
     if (segment->parent_->fsyncer_thread_state_ == kNvwalThreadStateRunningAndRequestedStop) {
