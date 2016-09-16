@@ -71,27 +71,27 @@ typedef enum {
 
 #define nvwal_atomic_init(PTR, VAL) atomic_init(PTR, VAL)
 
-#define nvwal_atomic_store(PTR, VAL) __atomic_store(PTR, VAL, __ATOMIC_SEQ_CST)
+#define nvwal_atomic_store(PTR, VAL) __atomic_store_n(PTR, VAL, __ATOMIC_SEQ_CST)
 #define nvwal_atomic_store_explicit(PTR, VAL, ORD)\
-  __atomic_store(PTR, VAL, ORD)
+  __atomic_store_n(PTR, VAL, ORD)
 
-#define nvwal_atomic_load(PTR) __atomic_load(PTR, __ATOMIC_SEQ_CST)
+#define nvwal_atomic_load(PTR) __atomic_load_n(PTR, __ATOMIC_SEQ_CST)
 #define nvwal_atomic_load_explicit(PTR, ORD)\
-  __atomic_load(PTR, ORD)
+  __atomic_load_n(PTR, ORD)
 
 #define nvwal_atomic_exchange(PTR, VAL) __atomic_exchange(PTR, VAL, __ATOMIC_SEQ_CST)
 #define nvwal_atomic_exchange_explicit(PTR, VAL, ORD)\
   __atomic_exchange(PTR, VAL, ORD)
 
-/* __atomic_compare_exchange (type *ptr, type *expected, type *desired, bool weak, int success_memorder, int failure_memorder) */
+/* bool __atomic_compare_exchange_n (type *ptr, type *expected, type desired, bool weak, int success_memorder, int failure_memorder) */
 #define nvwal_atomic_compare_exchange_weak(PTR, VAL, DES)\
-  __atomic_compare_exchange(PTR, VAL, DES, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
+  __atomic_compare_exchange_n(PTR, VAL, DES, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
 #define nvwal_atomic_compare_exchange_weak_explicit(PTR, VAL, DES, SUCC_ORD, FAIL_ORD)\
-  __atomic_compare_exchange(PTR, VAL, DES, 1, SUCC_ORD, FAIL_ORD)
+  __atomic_compare_exchange_n(PTR, VAL, DES, 1, SUCC_ORD, FAIL_ORD)
 #define nvwal_atomic_compare_exchange_strong(PTR, VAL, DES)\
-  __atomic_compare_exchange(PTR, VAL, DES, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
+  __atomic_compare_exchange_n(PTR, VAL, DES, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
 #define nvwal_atomic_compare_exchange_strong_explicit(PTR, VAL, DES, SUCC_ORD, FAIL_ORD)\
-  __atomic_compare_exchange(PTR, VAL, DES, ORD, 0, SUCC_ORD, FAIL_ORD)
+  __atomic_compare_exchange_n(PTR, VAL, DES, ORD, 0, SUCC_ORD, FAIL_ORD)
 
 #define nvwal_atomic_fetch_add(PTR, VAL) __atomic_fetch_add(PTR, VAL, __ATOMIC_SEQ_CST)
 #define nvwal_atomic_fetch_add_explicit(PTR, VAL, ORD)\
@@ -179,13 +179,13 @@ typedef enum {
 /** And a few, implementation-agnostic shorthand. */
 
 #define nvwal_atomic_load_acquire(PTR)\
-  atomic_load_explicit(PTR, nvwal_memory_order_acquire)
+  nvwal_atomic_load_explicit(PTR, nvwal_memory_order_acquire)
 
 #define nvwal_atomic_load_consume(PTR)\
-  atomic_load_explicit(PTR, nvwal_memory_order_consume)
+  nvwal_atomic_load_explicit(PTR, nvwal_memory_order_consume)
 
 #define nvwal_atomic_store_release(PTR, VAL)\
-  atomic_store_explicit(PTR, VAL, nvwal_memory_order_release)
+  nvwal_atomic_store_explicit(PTR, VAL, nvwal_memory_order_release)
 
 /** @} */
 
