@@ -20,6 +20,7 @@
 #include <time.h>
 #include <string.h>
 #include <thread>
+#include <assert.h>
 #include "nvwal_api.h"
 #include "nvwal_types.h"
 
@@ -37,9 +38,30 @@ private:
   struct timespec epoch_interval_;
   struct timespec write_interval_;
   uint64_t max_logrec_size_;
-  nvwal_epoch_t current_global_epoch_;
+  nvwal_epoch_t current_stable_epoch_;
   nvwal_epoch_t max_epoch_;
 
+  void circular_dest_memcpy(
+    char* circular_dest_base,
+    char* src,
+    uint64_t circular_dest_size,
+    uint64_t circular_dest_cur_offset,
+    uint64_t bytes_to_copy) {
+    assert(circular_dest_size >= circular_dest_cur_offset);
+    assert(circular_dest_size >= bytes_to_copy);
+    if (circular_dest_cur_offset + bytes_to_copy >= circular_dest_size) {
+      /** We need a wrap-around */
+      uint64_t bytes = circular_dest_size - circular_dest_cur_offset;
+      if (bytes) {
+        memcpy(circular_dest_base + circular_dest_cur_offset, src, bytes);
+        src += bytes;
+        bytes_to_copy -= bytes;
+      }
+      circular_dest_cur_offset = 0;
+    }
+
+    memcpy(circular_dest_base, src, bytes_to_copy);
+  }
 
   void generate_random_buffer(char *buf, size_t const len)
   {
@@ -62,6 +84,8 @@ private:
     epoch_frame->head_offset_ = 0;
     epoch_frame->tail_offset_ = 0;
     rc = nvwal_query_durable_epoch(writer->parent_, &current_epoch);
+    printf("Durable epoch: %d\n", current_epoch);
+    current_epoch = nvwal_increment_epoch(current_epoch);
     current_epoch = nvwal_increment_epoch(current_epoch);
     epoch_frame->log_epoch_ = current_epoch;
 
@@ -70,36 +94,50 @@ private:
 
       do
       {
-        /* write some number of log records for this epoch */
+        /* stable epoch is right behind us so finish our use of this epoch */
+        if (current_epoch == nvwal_increment_epoch(current_stable_epoch_))
+        {
+          rc = nvwal_on_wal_write(writer, bytes_written, current_epoch);
+          current_epoch = nvwal_increment_epoch(current_epoch);
+          bytes_written = 0;
+          break; /* we are done with this epoch */
+        } else if (current_epoch <= current_stable_epoch_)
+        {
+          /* we are lagging behind */
+          current_epoch = nvwal_increment_epoch(current_stable_epoch_);
+          current_epoch = nvwal_increment_epoch(current_epoch);
+          break;
+        }
 
+        /* write some number of log records for this epoch */
+        printf("Writer logging in epoch %d\n", current_epoch);
         while (!nvwal_has_enough_writer_space(writer)) { /* spin */ }
 
         /* write some bytes into log buffer */
-        /* randomly generated junk with random length? */    
-        bytes_written = 100; /* do randr() or something later */ 
-        memcpy((char *)(writer->buffer_), buf, bytes_written);
+        /* randomly generated junk with random length? */   
+        size_t bytes_to_write = 100;
+        circular_dest_memcpy((char *)(writer->buffer_), buf, config_.writer_buffer_size_,
+                               epoch_frame->tail_offset_, bytes_to_write);
         /* update last_tail_offset_ */
-        epoch_frame->tail_offset_ += bytes_written;
+        epoch_frame->tail_offset_ += bytes_to_write;
+        if (epoch_frame->tail_offset_ > config_.writer_buffer_size_)
+        {
+          epoch_frame->tail_offset_ %= config_.writer_buffer_size_;
+        }
         writer->last_tail_offset_ = epoch_frame->tail_offset_;
 
-        rc = nvwal_on_wal_write(writer, bytes_written, current_epoch);
-
-        /* need to catch up to global epoch? */
-       if (current_epoch < current_global_epoch_)
-       {
-         current_epoch = current_global_epoch_;
-       }
-
+        bytes_written += bytes_to_write; /* do randr() or something later */ 
         nanosleep(&write_interval_, NULL);
       } while (1);
 
       /* done with this frame. set up a new one. */
+      printf("Writer advancing frame, will log in epoch %\d\n", current_epoch);
       writer->active_frame_++;
       writer->active_frame_ %= kNvwalEpochFrameCount;
       epoch_frame = &(writer->epoch_frames_[writer->active_frame_]);
       epoch_frame->head_offset_ = writer->last_tail_offset_;
       epoch_frame->tail_offset_ = writer->last_tail_offset_;
-      current_epoch = nvwal_increment_epoch(current_epoch);
+      //current_epoch = nvwal_increment_epoch(current_epoch);
       epoch_frame->log_epoch_ = current_epoch;
 
       /* exit condition? */
@@ -190,9 +228,10 @@ public:
     do
     {
       nanosleep(&epoch_interval_, NULL);
-      current_global_epoch_ = nvwal_increment_epoch(current_global_epoch_);
-      nvwal_advance_stable_epoch(&wal_, current_global_epoch_);
-    } while (current_global_epoch_ <= max_epoch_);
+      current_stable_epoch_ = nvwal_increment_epoch(current_stable_epoch_);
+      nvwal_advance_stable_epoch(&wal_, current_stable_epoch_);
+      printf("Main thread, stable epoch: %d\n", current_stable_epoch_);
+    } while (current_stable_epoch_ <= max_epoch_);
 
     printf("Joining writer threads\n");
     for (int i = 0; i < config_.writer_count_; i++)
