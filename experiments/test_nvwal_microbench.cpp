@@ -84,7 +84,7 @@ private:
     epoch_frame->head_offset_ = 0;
     epoch_frame->tail_offset_ = 0;
     rc = nvwal_query_durable_epoch(writer->parent_, &current_epoch);
-    printf("Durable epoch: %d\n", current_epoch);
+    printf("Durable epoch: %lu\n", current_epoch);
     current_epoch = nvwal_increment_epoch(current_epoch);
     current_epoch = nvwal_increment_epoch(current_epoch);
     epoch_frame->log_epoch_ = current_epoch;
@@ -110,12 +110,12 @@ private:
         }
 
         /* write some number of log records for this epoch */
-        printf("Writer logging in epoch %d\n", current_epoch);
+        printf("Writer logging in epoch %lu\n", current_epoch);
         while (!nvwal_has_enough_writer_space(writer)) { /* spin */ }
 
         /* write some bytes into log buffer */
         /* randomly generated junk with random length? */   
-        size_t bytes_to_write = 100;
+        size_t bytes_to_write = 100;/* do randr() or something later */ 
         circular_dest_memcpy((char *)(writer->buffer_), buf, config_.writer_buffer_size_,
                                epoch_frame->tail_offset_, bytes_to_write);
         /* update last_tail_offset_ */
@@ -126,12 +126,12 @@ private:
         }
         writer->last_tail_offset_ = epoch_frame->tail_offset_;
 
-        bytes_written += bytes_to_write; /* do randr() or something later */ 
+        bytes_written += bytes_to_write; 
         nanosleep(&write_interval_, NULL);
       } while (1);
 
       /* done with this frame. set up a new one. */
-      printf("Writer advancing frame, will log in epoch %\d\n", current_epoch);
+      printf("Writer advancing frame, will log in epoch %lu\n", current_epoch);
       writer->active_frame_++;
       writer->active_frame_ %= kNvwalEpochFrameCount;
       epoch_frame = &(writer->epoch_frames_[writer->active_frame_]);
@@ -230,7 +230,7 @@ public:
       nanosleep(&epoch_interval_, NULL);
       current_stable_epoch_ = nvwal_increment_epoch(current_stable_epoch_);
       nvwal_advance_stable_epoch(&wal_, current_stable_epoch_);
-      printf("Main thread, stable epoch: %d\n", current_stable_epoch_);
+      printf("Main thread, stable epoch: %lu\n", current_stable_epoch_);
     } while (current_stable_epoch_ <= max_epoch_);
 
     printf("Joining writer threads\n");

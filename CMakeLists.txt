@@ -93,6 +93,7 @@ if(NO_NVWAL_TEST)
 else(NO_NVWAL_TEST)
   add_subdirectory(example)
   add_subdirectory(test)
+  add_subdirectory(experiments)
   add_subdirectory(third_party) # all of them are just for test
 endif(NO_NVWAL_TEST)
 
