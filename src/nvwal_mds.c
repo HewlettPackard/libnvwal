@@ -961,6 +961,11 @@ nvwal_error_t mds_init(
 
   mds->wal_ = wal;
 
+  /* Caller already cleaned up so we handle it as a fresh create */
+  if (mode == kNvwalInitCreateTruncate) {
+    mode = kNvwalInitCreateIfNotExists;
+  }
+
   int io_did_restart;
   NVWAL_CHECK_ERROR(mds_io_init(mode, wal, &io_did_restart));
 
