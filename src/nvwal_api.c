@@ -398,7 +398,8 @@ nvwal_error_t flusher_conclude_stable_epoch(
     if (mds_ret == ENOBUFS) {
       /* This is an expected error saying that we should trigger paging */
       const nvwal_epoch_t new_paged_epoch = wal->durable_epoch_;
-      /* TODO NVWAL_CHECK_ERROR(mds_evict_page(wal, new_paged_epoch)); */
+      // FIXME: all metadata shall be managed by MDS
+      NVWAL_CHECK_ERROR(mds_writeback(wal));
 
       /* Also durably record that we paged MDS */
       NVWAL_CHECK_ERROR(flusher_update_mpe(wal, new_paged_epoch));
@@ -615,7 +616,6 @@ void nvwal_wait_for_fsync_start(struct NvwalContext* wal) {
 }
 
 nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
-  uint32_t cur_segment;
   uint8_t* const thread_state = &wal->fsyncer_thread_state_;
 
   nvwal_error_t error_code = 0;
@@ -636,21 +636,28 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
       break;
     }
 
-    for (cur_segment = 0; cur_segment < wal->segment_count_; ++cur_segment) {
-      struct NvwalLogSegment* segment = wal->segments_ + cur_segment;
-      if (!segment->fsync_completed_
-        && nvwal_atomic_load_acquire(&(segment->fsync_requested_))) {
-        error_code = fsyncer_sync_one_segment_to_disk(wal->segments_ + cur_segment);
-        if (error_code) {
-          break;
-        }
-      }
-
-      /** Promptly react when obvious. but no need to be atomic read. */
-      if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
+    uint32_t cur_segment;
+    const nvwal_dsid_t last_sync_dsid = wal->nv_control_block_->fsyncer_progress_.last_synced_dsid_;
+    if (last_sync_dsid == kNvwalInvalidDsid) {
+      cur_segment = 0; 
+    } else {
+      cur_segment = last_sync_dsid % wal->segment_count_;
+    }
+    
+    struct NvwalLogSegment* segment = wal->segments_ + cur_segment;
+    if (!segment->fsync_completed_
+      && nvwal_atomic_load_acquire(&(segment->fsync_requested_))) {
+      error_code = fsyncer_sync_one_segment_to_disk(wal->segments_ + cur_segment);
+      if (error_code) {
         break;
       }
     }
+
+    /** Promptly react when obvious. but no need to be atomic read. */
+    if ((*thread_state) == kNvwalThreadStateRunningAndRequestedStop) {
+      break;
+    }
+
     if (error_code) {
       break;
     }
@@ -662,14 +669,15 @@ nvwal_error_t nvwal_fsync_main(struct NvwalContext* wal) {
 
 
 nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) {
-  assert(segment->dsid_);
+  const nvwal_dsid_t dsid = nvwal_atomic_load_acquire(&segment->dsid_);
+  assert(dsid);
   assert(!segment->fsync_completed_);
   nvwal_error_t ret = 0;
   segment->fsync_error_ = 0;
   char disk_path[kNvwalMaxPathLength];
   nvwal_construct_disk_segment_path(
     segment->parent_,
-    segment->dsid_,
+    dsid,
     disk_path);
 
   /*
@@ -714,12 +722,13 @@ nvwal_error_t fsyncer_sync_one_segment_to_disk(struct NvwalLogSegment* segment) 
   close(disk_fd);
   nvwal_open_and_fsync(segment->parent_->config_.disk_root_);
 
+  /* Writing to fsync_completed must be after reading segment->dsid_ */
   nvwal_atomic_store(&(segment->fsync_completed_), 1U);
 
   /* Durably bump up CB's progress info */
-  assert(segment->dsid_
+  assert(dsid 
     > segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_);
-  segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_ = segment->dsid_;
+  segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_ = dsid;
   pmem_persist(
     &segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_,
     sizeof(segment->parent_->nv_control_block_->fsyncer_progress_.last_synced_dsid_));
