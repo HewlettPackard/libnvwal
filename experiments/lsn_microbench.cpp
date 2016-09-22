@@ -183,7 +183,7 @@ nvwal_error_t LsnLog::log_and_commit(const nvwal_byte_t* buf, size_t size)
 
   while (!nvwal_has_enough_writer_space(writer_)) { /* spin */ }
 
-  nvwal_circular_dest_memcpy(writer_->buffer_, buf, config_.writer_buffer_size_, head_offset_, size);
+  nvwal_circular_dest_memcpy(writer_->buffer_, config_.writer_buffer_size_, head_offset_, buf, size);
   head_offset_ = (head_offset_ + size) % config_.writer_buffer_size_;
   nvwal_error_t rc = nvwal_on_wal_write(writer_, size, current_epoch_);
   assert(rc == 0);

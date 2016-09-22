@@ -167,9 +167,9 @@ void nvwal_circular_memcpy(
  */
 void nvwal_circular_dest_memcpy(
     nvwal_byte_t* circular_dest_base,
-    const nvwal_byte_t* src,
     uint64_t circular_dest_size,
     uint64_t circular_dest_cur_offset,
+    const nvwal_byte_t* src,
     uint64_t bytes_to_copy);
 
 /**
