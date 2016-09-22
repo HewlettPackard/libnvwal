@@ -98,11 +98,9 @@ void nvwal_debug_printd(
   int line, 
   const char *strformat, ...) 
 {
-#ifndef NDEBUG
   va_list arglist;
 
   va_start(arglist, strformat);
   nvwal_debug_printd_impl(dlevel, file, line, strformat, arglist);
   va_end(arglist);
-#endif
 }

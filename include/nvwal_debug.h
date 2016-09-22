@@ -68,6 +68,11 @@ int nvwal_debug_init(enum NvwalDebugLevel minloglevel);
  */
 void nvwal_debug_printd(enum NvwalDebugLevel dlevel, char *file, int line, const char *strformat, ...);
 
+#ifdef NDEBUG
+
+#define LOG(debug_level, format, ...) ((void)0)
+
+#else
 
 /**
  * @brief Log debug message.
@@ -78,6 +83,7 @@ void nvwal_debug_printd(enum NvwalDebugLevel dlevel, char *file, int line, const
 #define LOG(debug_level, format, ...)                                            \
     nvwal_debug_printd(debug_level, __FILE__, __LINE__, format, ##__VA_ARGS__ )
 
+#endif
 
 /** @} */
 
