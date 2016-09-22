@@ -30,6 +30,7 @@
 
 #include "nvwal_atomics.h"
 #include "nvwal_api.h"
+#include "nvwal_debug.h"
 #include "nvwal_mds.h"
 #include "nvwal_mds_types.h"
 #include "nvwal_util.h"
@@ -150,6 +151,10 @@ nvwal_error_t sanity_check_config(
   struct NvwalConfig* config,
   enum NvwalInitMode mode) {
   config->libnvwal_version_ = nvwal_get_version();
+  
+  if (config->debug_level_ == kNvwalInvalidDebugLevel) {
+    config->debug_level_ = ERROR;
+  } 
 
   /** Check/adjust nv_root/disk_root */
   config->nv_root_len_ = strnlen(config->nv_root_, kNvwalMaxPathLength);
@@ -465,6 +470,8 @@ nvwal_error_t impl_init_no_error_handling(
   struct NvwalContext* wal) {
   struct NvwalConfig* config = &(wal->config_);
   NVWAL_CHECK_ERROR(sanity_check_config(config, mode));
+
+  NVWAL_CHECK_ERROR(nvwal_debug_init(config->debug_level_));
 
   /** CreateTruncate is same as Create except it nukes everything first. */
   if (mode == kNvwalInitCreateTruncate) {

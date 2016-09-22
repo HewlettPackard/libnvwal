@@ -199,6 +199,17 @@ typedef uint64_t mds_file_no_t;
 typedef uint64_t  nvwal_dsid_t;
 
 /**
+ * @brief Debug logging severity levels 
+ */
+enum NvwalDebugLevel {
+  kNvwalInvalidDebugLevel = 0,
+  INFO = 1, 
+  WARNING, 
+  ERROR, 
+  FATAL
+};
+
+/**
  * @brief Parameter to control how libnvwal initializes each WAL instance.
  * @see nvwal_init()
  * @details
@@ -353,6 +364,11 @@ struct NvwalConfig {
    * implement some auto-conversion for a minor version difference.
    */
   uint64_t libnvwal_version_;
+
+  /**
+   * Debug logging severity level
+   */
+  int debug_level_;
 
   /**
    * Null-terminated string of folder to NVDIMM storage, under which

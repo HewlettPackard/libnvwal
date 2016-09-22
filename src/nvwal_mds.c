@@ -33,6 +33,7 @@
 #include <libpmem.h>
 
 #include "nvwal_atomics.h"
+#include "nvwal_debug.h"
 #include "nvwal_types.h"
 #include "nvwal_util.h"
 
@@ -143,11 +144,14 @@ nvwal_error_t mds_io_create_file(
   int fd = -1;
   char pathname[kNvwalMaxPathLength];
 
+
   nvwal_concat_sequence_filename(
     io->wal_->config_.disk_root_,
     MDS_PAGE_FILE_PREFIX,
     file_no,
     pathname);
+
+  LOG(INFO, "Create metadata page file %s", pathname);
 
   fd = open(pathname,
             O_CREAT|O_RDWR|O_TRUNC|O_APPEND,
