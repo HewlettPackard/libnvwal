@@ -150,6 +150,8 @@ static inline nvwal_error_t nvwal_stock_error_code(
 
 /**
  * Circular-buffer-aware memcpy.
+ *
+ * Circular buffer is source.
  */
 void nvwal_circular_memcpy(
   nvwal_byte_t* dest,
@@ -157,6 +159,18 @@ void nvwal_circular_memcpy(
   uint64_t circular_src_size,
   uint64_t circular_src_cur_offset,
   uint64_t bytes_to_copy);
+
+/**
+ * Circular-buffer-aware memcpy.
+ *
+ * Circular buffer is destination.
+ */
+void nvwal_circular_dest_memcpy(
+    nvwal_byte_t* circular_dest_base,
+    const nvwal_byte_t* src,
+    uint64_t circular_dest_size,
+    uint64_t circular_dest_cur_offset,
+    uint64_t bytes_to_copy);
 
 /**
  * Min/max.

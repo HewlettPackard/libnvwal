@@ -166,7 +166,8 @@ nvwal_error_t TestContext::restart_clean() {
 
 nvwal_error_t TestContext::wait_until_durable(
   NvwalContext* wal,
-  nvwal_epoch_t expected_durable_epoch) {
+  nvwal_epoch_t expected_durable_epoch, 
+  uint64_t sleep_duration_ms) {
   while (true) {
     nvwal_epoch_t out;
     nvwal_error_t ret = nvwal_query_durable_epoch(wal, &out);
@@ -175,8 +176,10 @@ nvwal_error_t TestContext::wait_until_durable(
     } else if (nvwal_is_epoch_equal_or_after(out, expected_durable_epoch)) {
       break;
     }
-    std::this_thread::yield();
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (sleep_duration_ms) {
+      std::this_thread::yield();
+      std::this_thread::sleep_for(std::chrono::milliseconds(sleep_duration_ms));
+    }
   }
   return 0;
 }

@@ -23,6 +23,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(SYSTEM
   ${Boost_INCLUDE_DIRS}
   ${NVWAL_SRC_ROOT}/third_party/libbacktrace
+  ${NVWAL_BIN_ROOT}/third_party/gflags-2.1.1/include
   ${NVWAL_SRC_ROOT}/third_party/gtest-1.7.0/include
   ${NVWAL_SRC_ROOT}/third_party/tinyxml2-2.1.0
   ${NVWAL_SRC_ROOT}/third_party/valgrind-3.9.0/include)
@@ -39,3 +40,13 @@ include_directories(SYSTEM
 add_executable(test_nvwal_microbenchmark ${CMAKE_CURRENT_SOURCE_DIR}/test_nvwal_microbench.cpp)
 target_link_libraries(test_nvwal_microbenchmark nvwal-shared)
 
+set(UBENCH_DEPENDENCIES
+  nvwal-shared
+  ${CMAKE_THREAD_LIBS_INIT}
+  ${Boost_LIBRARIES}
+  gflags-static)
+
+
+
+add_executable(lsn_microbench ${CMAKE_CURRENT_SOURCE_DIR}/lsn_microbench.cpp)
+target_link_libraries(lsn_microbench ${UBENCH_DEPENDENCIES})

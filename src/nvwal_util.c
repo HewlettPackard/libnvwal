@@ -180,9 +180,7 @@ nvwal_error_t nvwal_open_and_syncfs(const char* path) {
   assert(fd);
 
   nvwal_error_t ret = 0;
-  if (syncfs(fd)) {
-    ret = errno;
-  }
+  sync();
 
   close(fd);
   return ret;
@@ -292,4 +290,28 @@ void nvwal_circular_memcpy(
 
   memcpy(dest, circular_src_base + circular_src_cur_offset, bytes_to_copy);
 }
+
+void nvwal_circular_dest_memcpy(
+    nvwal_byte_t* circular_dest_base,
+    const nvwal_byte_t* src,
+    uint64_t circular_dest_size,
+    uint64_t circular_dest_cur_offset,
+    uint64_t bytes_to_copy) 
+{
+    assert(circular_dest_size >= circular_dest_cur_offset);
+    assert(circular_dest_size >= bytes_to_copy);
+    if (circular_dest_cur_offset + bytes_to_copy >= circular_dest_size) {
+      /** We need a wrap-around */
+      uint64_t bytes = circular_dest_size - circular_dest_cur_offset;
+      if (bytes) {
+        memcpy(circular_dest_base + circular_dest_cur_offset, src, bytes);
+        src += bytes;
+        bytes_to_copy -= bytes;
+      }
+      circular_dest_cur_offset = 0;
+    }
+
+    memcpy(circular_dest_base, src, bytes_to_copy);
+}
+
 
