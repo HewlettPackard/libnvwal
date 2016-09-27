@@ -1172,8 +1172,7 @@ nvwal_error_t mds_write_epoch(
   struct Page* page = mds_bufmgr_page(buffer);
   page_offset_t epoch_off = epoch_id_to_page_offset(mds, epoch_id);
 
-  //TODO: persist via libpmem
-  memcpy(&page->epochs_[epoch_off], epoch_metadata, sizeof(*epoch_metadata));
+  pmem_memcpy_persist(&page->epochs_[epoch_off], epoch_metadata, sizeof(*epoch_metadata));
 
   nvwal_atomic_fetch_add(&mds->latest_epoch_, 1);
 
