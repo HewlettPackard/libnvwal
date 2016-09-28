@@ -395,29 +395,15 @@ nvwal_error_t flusher_conclude_stable_epoch(
 
   const nvwal_error_t mds_ret = mds_write_epoch(wal, &new_meta);
   if (mds_ret) {
-    if (mds_ret == ENOBUFS) {
-      /* This is an expected error saying that we should trigger paging */
-      const nvwal_epoch_t new_paged_epoch = wal->durable_epoch_;
-      // FIXME: all metadata shall be managed by MDS
-      NVWAL_CHECK_ERROR(mds_writeback(wal));
-
-      /* Also durably record that we paged MDS */
-      NVWAL_CHECK_ERROR(flusher_update_mpe(wal, new_paged_epoch));
-
-      /* Then try again. This time it should succeed */
-      NVWAL_CHECK_ERROR(mds_write_epoch(wal, &new_meta));
-    } else {
-      return mds_ret;
-    }
+    return mds_ret;
   }
 
   /*
-    * We have two instances of durable_epoch_ to make the following safe
-    * Durably write to CB's durable_epoch_, then 'announce' it to other threads
+    * We have two instances of durable_epoch_. MDS already 
+    * durably wrote to CB's durable_epoch_. Here we 'announce' it to other threads
     * by writing to wal->durable_epoch_. No usual thread directly refer to
     * CB's durable_epoch_.
     */
-  NVWAL_CHECK_ERROR(flusher_update_de(wal, target_epoch));
   nvwal_atomic_store(&wal->durable_epoch_, target_epoch);
 
   wal->flusher_current_epoch_head_dsid_ = cur_segment->dsid_;
