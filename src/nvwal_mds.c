@@ -453,7 +453,7 @@ static nvwal_error_t create_nvram_buffer_file(
     buffer_id,
     pathname);
 
-  nv_fd = open(pathname,
+  nv_fd = nvwal_open_best_effort_o_direct(pathname,
             O_CREAT|O_RDWR|O_TRUNC,
             S_IRUSR|S_IWUSR);
 
@@ -468,6 +468,21 @@ static nvwal_error_t create_nvram_buffer_file(
   if (ret) {
     goto error_return;
   }
+
+  /* Populate with persist as soon as possible to finalize the user-page file mapping */
+  void* mapped = mmap(0,
+                  bufmgr->wal_->config_.mds_page_size_,
+                  PROT_READ | PROT_WRITE,
+                  MAP_SHARED,
+                  nv_fd,
+                  0);
+  if (mapped == MAP_FAILED) {
+    ret = errno;
+    goto error_return;
+  }
+  assert(mapped);
+  pmem_memset_persist(mapped, 0, bufmgr->wal_->config_.mds_page_size_);
+  munmap(mapped, bufmgr->wal_->config_.mds_page_size_);
 
   fsync(nv_fd);
   close(nv_fd);
@@ -520,7 +535,7 @@ static nvwal_error_t map_nvram_buffer_file(
     buffer_id,
     pathname);
 
-  nv_fd = open(pathname, O_RDWR|O_APPEND);
+  nv_fd = nvwal_open_best_effort_o_direct(pathname, O_RDWR, 0);
 
   if (nv_fd == -1) {
     /** Failed to open/create the file! */
@@ -1232,8 +1247,7 @@ nvwal_error_t mds_write_epoch(
   struct Page* page = mds_bufmgr_page(buffer);
   page_offset_t epoch_off = epoch_id_to_page_offset(mds, epoch_id);
 
-  //TODO: persist via libpmem
-  memcpy(&page->epochs_[epoch_off], epoch_metadata, sizeof(*epoch_metadata));
+  pmem_memcpy_persist(&page->epochs_[epoch_off], epoch_metadata, sizeof(*epoch_metadata));
 
   nvwal_atomic_fetch_add(&mds->latest_epoch_, 1);
 
