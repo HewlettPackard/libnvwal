@@ -88,8 +88,8 @@ nvwal_epoch_t mds_latest_epoch(struct NvwalContext* wal);
  * range of epoch metadata.
  *
  * @param[in] wal WAL context instance.
- * @param[in] begin_epoch_id Starting epoch of the range.
- * @param[in] end_epoch_id Inclusive ending epoch of the range.
+ * @param[in] begin_epoch_id Inclusive beginning of the epoch range to read.
+ * @param[in] end_epoch_id Exclusive ending of the epoch range to read.
  * @param[out] iterator The iterator instance to initialize.
  * 
  * @details

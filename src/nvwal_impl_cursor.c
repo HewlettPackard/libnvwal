@@ -209,7 +209,7 @@ nvwal_error_t cursor_fetch_epoch_metadata(
   NVWAL_CHECK_ERROR(mds_epoch_iterator_init(
     cursor->wal_,
     from_epoch,
-    to_epoch - 1U,  /* TODO FIXME this is a tentative code until MDS employs exclusive end */
+    to_epoch,
     &mds_iterator));
   nvwal_epoch_t cur_epoch = from_epoch;  /* Mostly for sanity check */
   for (int i = 0; i < kNvwalCursorEpochPrefetches; ++i) {

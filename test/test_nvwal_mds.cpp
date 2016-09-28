@@ -95,7 +95,7 @@ void read_and_verify_expected(struct NvwalContext* wal, nvwal_epoch_t low, nvwal
 {
   struct MdsEpochIterator iterator;
   nvwal_epoch_t expected_epoch_id = low; 
-  for (mds_epoch_iterator_init(wal, low, high, &iterator);
+  for (mds_epoch_iterator_init(wal, low, high+1, &iterator);
        !mds_epoch_iterator_done(&iterator);
        mds_epoch_iterator_next(&iterator)) 
   {
@@ -189,7 +189,7 @@ TEST(NvwalMdsTest, ReadEpochOnePage)
 
   struct MdsEpochIterator iterator;
   nvwal_epoch_t expected_epoch_id = 1; 
-  for (mds_epoch_iterator_init(wal, 1, batch_last_epoch[0], &iterator);
+  for (mds_epoch_iterator_init(wal, 1, batch_last_epoch[0]+1, &iterator);
        !mds_epoch_iterator_done(&iterator);
        mds_epoch_iterator_next(&iterator)) 
   {
@@ -213,7 +213,7 @@ TEST(NvwalMdsTest, ReadEpochTwoPages)
 
   struct MdsEpochIterator iterator;
   nvwal_epoch_t expected_epoch_id = 1; 
-  for (mds_epoch_iterator_init(wal, 1, batch_last_epoch[0], &iterator);
+  for (mds_epoch_iterator_init(wal, 1, batch_last_epoch[0]+1, &iterator);
        !mds_epoch_iterator_done(&iterator);
        mds_epoch_iterator_next(&iterator)) 
   {

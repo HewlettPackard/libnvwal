@@ -216,7 +216,6 @@ nvwal_error_t mds_io_pread(
   size_t total_read = 0;
   while (total_read < count) {
     ret = pread(file->fd_, (char*) buf + total_read, count - total_read, offset+total_read);
-    //printf("mds_io_pread: %p %d %p %d\n", buf, total_read, (char*) buf + total_read, ret);
     if (ret < 0) {
       ret = errno;
       goto error_return;
@@ -828,7 +827,7 @@ nvwal_error_t mds_bufmgr_read_page(
   struct NvwalMdsBuffer* buffer = &bufmgr->write_buffers_[file->file_no_];
 
   NVWAL_CHECK_ERROR(mds_io_pread(file, buffer->baseaddr_, max_epochs_per_page(mds) * sizeof(struct MdsEpochMetadata), page_no_to_file_offset(mds, page_no)));
-  //TODO: call persist on buffer range
+  pmem_persist(buffer->baseaddr_, max_epochs_per_page(mds) * sizeof(struct MdsEpochMetadata));
 
   nvwal_atomic_store(&buffer->page_no_, page_no);
   buffer->file_ = file;
@@ -1185,7 +1184,7 @@ error_return:
 void mds_epoch_iterator_next(struct MdsEpochIterator* iterator)
 {
   iterator->cur_epoch_id_++;
-  if (iterator->cur_epoch_id_ <= iterator->end_epoch_id_) {
+  if (iterator->cur_epoch_id_ < iterator->end_epoch_id_) {
     mds_epoch_iterator_prefetch(iterator);
   }
 }
@@ -1193,7 +1192,7 @@ void mds_epoch_iterator_next(struct MdsEpochIterator* iterator)
 
 int mds_epoch_iterator_done(struct MdsEpochIterator* iterator)
 {
-  return (iterator->cur_epoch_id_ > iterator->end_epoch_id_);
+  return (iterator->cur_epoch_id_ >= iterator->end_epoch_id_);
 }
 
 
@@ -1309,7 +1308,7 @@ nvwal_error_t mds_read_one_epoch(
   NVWAL_CHECK_ERROR(mds_epoch_iterator_init(
     wal,
     epoch_id,
-    epoch_id,
+    epoch_id+1,
     &mds_iterator));
   assert(!mds_epoch_iterator_done(&mds_iterator));
   assert(mds_iterator.epoch_metadata_->epoch_id_  == epoch_id);
