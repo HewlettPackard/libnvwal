@@ -33,3 +33,5 @@ for segment_size_pow in range(18, 19):
   total_bytes = nops * nlogrec * logrec_size
   throughput = total_bytes * 1000000 / duration_us 
   print segment_size, throughput
+  print 
+  print
