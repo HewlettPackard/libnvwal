@@ -50,6 +50,9 @@ DEFINE_string(nvm_file, "",
 DEFINE_uint64(nops, 1000000, 
   "Number of workload operations per worker.");
 
+DEFINE_uint64(nrepeats, 1, 
+  "Number of repetitions.");
+
 DEFINE_uint64(data_size, 1U << 12, 
   "Number of bytes written per workload operation.");
 
@@ -161,9 +164,12 @@ int Workload::do_work(int tid)
 
   auto start = std::chrono::steady_clock::now();
 
-  for (int i=0; i<nops_; i++) {
-    char* dst=&pmemaddr_[i*data_size_];
-    (*this.*memcpy_method_)(dst, buf, data_size_);
+  uint64_t nrepeats = FLAGS_nrepeats;
+  for (int r=0; r<nrepeats; r++) {
+    for (int i=0; i<nops_; i++) {
+      char* dst=&pmemaddr_[i*data_size_];
+      (*this.*memcpy_method_)(dst, buf, data_size_);
+    }
   }
 
   auto end = std::chrono::steady_clock::now();
@@ -172,7 +178,7 @@ int Workload::do_work(int tid)
   uint64_t duration_usec = std::chrono::duration<double, std::ratio<1, 1000000>> (diff).count();
 
   std::cout << "workload_duration " << duration_usec << " us" << std::endl;
-  std::cout << "throughput " << nops_* data_size_ / duration_usec<< " MB/s" << std::endl;
+  std::cout << "throughput " << nrepeats*nops_* data_size_ / duration_usec<< " MB/s" << std::endl;
 }
 
 nvwal_error_t Workload::run(int nthreads)

@@ -52,6 +52,9 @@ DEFINE_uint64(mds_page_size, 1U << 9,
 DEFINE_uint64(writer_buffer_size, 1U << 13, 
   "Size of (volatile) buffer for each writer-thread.");
 
+DEFINE_uint64(nthreads, 1, 
+  "Number of worker threads");
+
 DEFINE_uint64(nops, 1000000, 
   "Number of workload operations per worker.");
 
@@ -312,7 +315,7 @@ int main(int argc, char *argv[])
   }
 
   Workload workload(&lsn_log);
-  workload.run(1);
+  workload.run(FLAGS_nthreads);
 
   lsn_log.uninit();
 
