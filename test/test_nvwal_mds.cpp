@@ -56,13 +56,7 @@ void write_epoch_batch(struct NvwalContext* wal, nvwal_epoch_t low, nvwal_epoch_
   for (int i=low; i<=high; i++) {
     memset(&epoch, 0, sizeof(epoch));
     epoch.epoch_id_ = i;
-    if (mds_write_epoch(wal, &epoch) == ENOBUFS) {
-      EXPECT_EQ(0, mds_writeback(wal));
-      set_paged_mds_epoch(wal, epoch.epoch_id_);
-      /* second attempt must succeed */
-      EXPECT_EQ(0, mds_write_epoch(wal, &epoch));
-    }
-    set_durable_epoch(wal, epoch.epoch_id_);
+    EXPECT_EQ(0, mds_write_epoch(wal, &epoch));
   }
 }
 

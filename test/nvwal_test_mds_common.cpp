@@ -33,6 +33,7 @@
 #include <boost/filesystem.hpp>
 
 #include "nvwal_api.h"
+#include "nvwal_debug.h"
 #include "nvwal_impl_mds.h"
 #include "nvwal_mds.h"
 #include "nvwal_stacktrace.hpp"
@@ -106,6 +107,8 @@ nvwal_error_t MdsTestContext::__init_internal(
     std::memcpy(config.nv_root_, wal_root.string().data(), wal_root.string().length());
     config.mds_page_size_ = kNvwalMdsPageSize;
     memcpy(&wal->config_, &config, sizeof(config));
+
+    nvwal_debug_init(WARNING);
 
     // allocate some pseudo nv control block as wal initialization would allocate it
     wal->nv_control_block_ = new NvwalControlBlock;

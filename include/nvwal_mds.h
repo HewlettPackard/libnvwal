@@ -71,23 +71,10 @@ nvwal_error_t mds_uninit(struct NvwalContext* wal);
  * @details
  * When the function returns successfully, the epoch metadata is 
  * guaranteed to be durable.
- *
- * If it returns ENOBUFS, then the caller shall call mds_writeback
- * to write the filled buffer back to the backing page file and 
- * retry mds_write_epoch.
  */
 nvwal_error_t mds_write_epoch(
   struct NvwalContext* wal, 
   struct MdsEpochMetadata* epoch_metadata);
-
-/**
- * @brief Write dirty and completely filled buffers back to the 
- * backing page file.
- * 
- * @param[in] wal WAL context instance.
- */
-nvwal_error_t mds_writeback(struct NvwalContext* wal);
-
 
 /**
  * @brief Returns identifier of latest durable epoch. 

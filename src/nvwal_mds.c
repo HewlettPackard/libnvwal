@@ -32,6 +32,7 @@
 
 #include <libpmem.h>
 
+#include "nvwal_api.h"
 #include "nvwal_atomics.h"
 #include "nvwal_debug.h"
 #include "nvwal_types.h"
@@ -850,43 +851,88 @@ nvwal_error_t mds_bufmgr_writeback(
  * @details
  * This is taken from the nvwal control block.
  */
-static nvwal_epoch_t mds_latest_durable_epoch(struct NvwalMdsContext* mds)
+nvwal_epoch_t mds_durable_epoch(struct NvwalContext* wal)
 {
-  struct NvwalContext* wal = mds->wal_;
   return wal->nv_control_block_->flusher_progress_.durable_epoch_;
 }
 
-
-/*
- * @brief Sets latest durable epoch.
+/**
+ * Invoked from flusher_conclude_stable_epoch to durably bump up CB's durable_epoch_.
  */
-static void mds_set_latest_durable_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t val)
-{
-  struct NvwalContext* wal = mds->wal_;
-  wal->nv_control_block_->flusher_progress_.durable_epoch_ = val;
+nvwal_error_t mds_update_durable_epoch(struct NvwalContext* wal, nvwal_epoch_t new_de) {
+  assert(nvwal_is_epoch_equal_or_after(
+    new_de,
+    wal->nv_control_block_->flusher_progress_.durable_epoch_));
+  /* Same as above */
+  wal->nv_control_block_->flusher_progress_.durable_epoch_ = new_de;
+
+  pmem_persist(
+    &wal->nv_control_block_->flusher_progress_.durable_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.durable_epoch_));
+
+  return 0;
+}
+
+
+/**
+ * Invoked from flusher_conclude_stable_epoch to durably bump up CB's durable_epoch_.
+ */
+nvwal_error_t mds_set_durable_epoch(struct NvwalContext* wal, nvwal_epoch_t new_de) {
+  /* Same as above */
+  wal->nv_control_block_->flusher_progress_.durable_epoch_ = new_de;
+
+  pmem_persist(
+    &wal->nv_control_block_->flusher_progress_.durable_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.durable_epoch_));
+
+  return 0;
+}
+
+
+/**
+ * Invoked from flusher_conclude_stable_epoch to durably bump up CB's paged_mds_epoch_.
+ */
+nvwal_error_t mds_update_paged_epoch(struct NvwalContext* wal, nvwal_epoch_t new_mpe) {
+  assert(nvwal_is_epoch_equal_or_after(
+    new_mpe,
+    wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
+  /* No race in CB. Usual write */
+  wal->nv_control_block_->flusher_progress_.paged_mds_epoch_ = new_mpe;
+
+  /** But, it must be a durable write */
+  pmem_persist(
+    &wal->nv_control_block_->flusher_progress_.paged_mds_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
+
+  return 0;
+}
+
+
+/**
+ * Invoked from flusher_conclude_stable_epoch to durably bump up CB's paged_mds_epoch_.
+ */
+nvwal_error_t mds_set_paged_epoch(struct NvwalContext* wal, nvwal_epoch_t new_mpe) {
+  /* No race in CB. Usual write */
+  wal->nv_control_block_->flusher_progress_.paged_mds_epoch_ = new_mpe;
+
+  /** But, it must be a durable write */
+  pmem_persist(
+    &wal->nv_control_block_->flusher_progress_.paged_mds_epoch_,
+    sizeof(wal->nv_control_block_->flusher_progress_.paged_mds_epoch_));
+
+  return 0;
 }
 
 
 /*
- * @brief Returns latest paged epoch to disk.
+ * @brief Returns latest epoch paged to disk.
  *
  * @details
  * This is taken from the nvwal control block.
  */
-static nvwal_epoch_t mds_latest_paged_epoch(struct NvwalMdsContext* mds)
+nvwal_epoch_t mds_paged_epoch(struct NvwalContext* wal)
 {
-  struct NvwalContext* wal = mds->wal_;
   return wal->nv_control_block_->flusher_progress_.paged_mds_epoch_;
-}
-
-
-/*
- * @brief Sets latest paged epoch.
- */
-static void mds_set_latest_paged_epoch(struct NvwalMdsContext* mds, nvwal_epoch_t val)
-{
-  struct NvwalContext* wal = mds->wal_;
-  wal->nv_control_block_->flusher_progress_.paged_mds_epoch_ = val;
 }
 
 
@@ -908,8 +954,8 @@ static nvwal_error_t mds_recover(struct NvwalContext* wal)
     struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, i);
     struct NvwalMdsBuffer* buffer;
 
-    nvwal_epoch_t latest_epoch = mds_latest_durable_epoch(mds);
-    nvwal_epoch_t latest_paged_epoch = mds_latest_paged_epoch(mds);
+    nvwal_epoch_t latest_epoch = mds_durable_epoch(wal);
+    nvwal_epoch_t latest_paged_epoch = mds_paged_epoch(wal);
 
     if (latest_epoch < latest_paged_epoch) {
       /* Complete outstanding rollback/truncation */
@@ -1155,6 +1201,7 @@ nvwal_error_t mds_write_epoch(
   struct NvwalContext* wal,
   struct MdsEpochMetadata* epoch_metadata)
 {
+  nvwal_error_t ret;
   struct NvwalMdsBuffer* buffer;
   struct NvwalMdsContext* mds = &(wal->mds_);
   struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
@@ -1163,7 +1210,20 @@ nvwal_error_t mds_write_epoch(
   page_no_t page_no = epoch_id_to_page_no(mds, epoch_id);
   struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, file_no);
 
-  NVWAL_CHECK_ERROR(mds_bufmgr_alloc_page(bufmgr, file, page_no, &buffer));
+  ret = mds_bufmgr_alloc_page(bufmgr, file, page_no, &buffer);
+  if (ret == ENOBUFS) {
+    /* This is an expected error saying that we should trigger paging */
+    NVWAL_CHECK_ERROR(mds_bufmgr_writeback(bufmgr));
+
+    /* Also durably record that we paged out */
+    NVWAL_CHECK_ERROR(mds_update_paged_epoch(wal, mds_durable_epoch(wal)));
+      
+    /* And now retry allocating a buffer. It shall work */
+    ret = mds_bufmgr_alloc_page(bufmgr, file, page_no, &buffer);
+  }
+  if (ret) {
+    return ret;
+  }
 
   /*
    * If we reach here, then it's guaranteed that the buffered page has enough
@@ -1177,6 +1237,8 @@ nvwal_error_t mds_write_epoch(
 
   nvwal_atomic_fetch_add(&mds->latest_epoch_, 1);
 
+  NVWAL_CHECK_ERROR(mds_update_durable_epoch(wal, epoch_id));
+
   return 0;
 }
 
@@ -1188,6 +1250,7 @@ nvwal_error_t mds_writeback(struct NvwalContext* wal)
 
   return mds_bufmgr_writeback(bufmgr);
 }
+
 
 /**
  * @details
@@ -1203,9 +1266,9 @@ nvwal_error_t mds_rollback_to_epoch(
   struct NvwalMdsBufferManagerContext* bufmgr = &(mds->bufmgr_);
   struct NvwalMdsBuffer* buffer;
 
-  mds_set_latest_durable_epoch(mds, epoch);
+  mds_set_durable_epoch(wal, epoch);
 
-  if (epoch < mds_latest_paged_epoch(mds)) {
+  if (epoch < mds_paged_epoch(wal)) {
     file_no_t file_no = epoch_id_to_file_no(mds, epoch);
     page_no_t page_no = epoch_id_to_page_no(mds, epoch);
     struct NvwalMdsPageFile* file = mds_io_file(&mds->io_, file_no);
@@ -1213,7 +1276,7 @@ nvwal_error_t mds_rollback_to_epoch(
     NVWAL_CHECK_ERROR(mds_bufmgr_read_page(bufmgr, file, page_no, &buffer));
     page_no_t new_latest_paged_page = page_no - 1;
     NVWAL_CHECK_ERROR(mds_io_truncate_file(file, new_latest_paged_page));
-    mds_set_latest_paged_epoch(mds, max_epochs_per_page(mds)*new_latest_paged_page);
+    mds_set_paged_epoch(wal, max_epochs_per_page(mds)*new_latest_paged_page);
   }
 
   if (epoch < mds->latest_epoch_) {

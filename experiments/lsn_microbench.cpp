@@ -55,8 +55,11 @@ DEFINE_uint64(writer_buffer_size, 1U << 13,
 DEFINE_uint64(nops, 1000000, 
   "Number of workload operations per worker.");
 
-DEFINE_uint64(nbytes, 1U << 7, 
-  "Number of bytes written per workload operation.");
+DEFINE_uint64(nlogrec, 8, 
+  "Number of log records written per workload operation.");
+
+DEFINE_uint64(logrec_size, 1U << 7, 
+  "Byte size of log secord");
 
 
 
@@ -236,12 +239,12 @@ int Workload::do_work(int tid)
   nvwal_byte_t buf[max_logrec_size_];
   generate_random_buffer(buf, max_logrec_size_);
 
-  assert(FLAGS_nbytes < max_logrec_size_);
+  assert(FLAGS_logrec_size < max_logrec_size_);
 
   auto start = std::chrono::steady_clock::now();
 
   for (int i=0; i<FLAGS_nops; i++) {
-    log_->log_and_commit(buf, FLAGS_nbytes);
+    log_->log_and_commit(buf, FLAGS_logrec_size * FLAGS_nlogrec);
   }
 
   auto end = std::chrono::steady_clock::now();
@@ -300,7 +303,7 @@ int main(int argc, char *argv[])
   config.segment_size_ = FLAGS_segment_size;
   config.mds_page_size_ = FLAGS_mds_page_size;
   config.writer_buffer_size_ = FLAGS_writer_buffer_size;
-
+  
   LsnLog lsn_log(config);
 
   if (rc = lsn_log.init()) {

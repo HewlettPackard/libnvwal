@@ -85,6 +85,10 @@ void nvwal_debug_printd(enum NvwalDebugLevel dlevel, char *file, int line, const
 
 #endif
 
+#ifdef __cplusplus
+}
+#endif
+
 /** @} */
 
 #endif  /* NVWAL_DEBUG_H_ */
