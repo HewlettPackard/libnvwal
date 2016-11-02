@@ -499,7 +499,7 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
     }
 
     assert(cur_segment->written_bytes_ <= segment_size);
-    const uint64_t writable_bytes = cur_segment->written_bytes_ - segment_size;
+    const uint64_t writable_bytes = segment_size - cur_segment->written_bytes_;
     const uint64_t copied_bytes = NVWAL_MIN(writable_bytes, distance);
 
     /** The following memcpy must not be reordered */
