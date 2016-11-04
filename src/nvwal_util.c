@@ -311,7 +311,7 @@ void nvwal_circular_dest_memcpy(
       circular_dest_cur_offset = 0;
     }
 
-    memcpy(circular_dest_base, src, bytes_to_copy);
+    memcpy(circular_dest_base + circular_dest_cur_offset, src, bytes_to_copy);
 }
 
 
