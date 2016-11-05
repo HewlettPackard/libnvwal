@@ -183,6 +183,22 @@ nvwal_error_t nvwal_on_wal_write(
   uint64_t bytes_written,
   nvwal_epoch_t log_epoch);
 
+/** 
+ * @brief Assigns user defined metadata to a given epoch.
+ * @param[in] writer the writer that represents the calling thread itself
+ * @param[in] log_epoch epoch to assign metadata to
+ * @param[in] metadata user define metadata
+ * Same constraints and invariants apply as nvwal_on_wal_write.
+ * Overwrites any previously assigned metadata, and assigned metadata 
+ * becomes durable when epoch becomes durable.
+ * When multiple writers concurrently assign metadata, then this constitutes
+ * a data race and the outcome is undefined.
+ */
+nvwal_error_t nvwal_tag_epoch(
+  struct NvwalWriterContext* writer,
+  nvwal_epoch_t log_epoch,
+  uint64_t metadata);
+
 /**
  * @returns.Whether the writer has plenty of space left in the buffer.
  * When this returns false, the caller in client application should

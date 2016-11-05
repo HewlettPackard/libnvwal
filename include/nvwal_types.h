@@ -558,6 +558,11 @@ struct NvwalWriterEpochFrame {
    * Always written by the writer itself only. Read by the flusher and the writer.
    */
   nvwal_epoch_t log_epoch_;
+
+  /**
+   * User metadata associated with this epoch.
+   */
+  uint64_t user_metadata_;
 };
 
 /**
@@ -957,8 +962,15 @@ struct NvwalContext {
    * it's already synced to disc or still in NVDIMM.
    */
   nvwal_dsid_t flusher_current_epoch_head_dsid_;
+
   /** Byte offset in the segment */
   uint64_t     flusher_current_epoch_head_offset_;
+
+  /**
+   * User defined metadata associated with currently flushed epoch.
+   */
+  uint64_t flusher_current_epoch_user_metadata_;
+
 
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];
 

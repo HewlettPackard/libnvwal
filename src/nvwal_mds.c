@@ -38,8 +38,6 @@
 #include "nvwal_types.h"
 #include "nvwal_util.h"
 
-/* Inspired by Black Swan of Tchaikovsky */
-
 /*
  * The type is defined in nvwal_mds_types.h but we do the assert check
  * here to ensure header files can be compiled with older C compilers
@@ -1231,7 +1229,7 @@ nvwal_error_t mds_write_epoch(
 
     /* Also durably record that we paged out */
     NVWAL_CHECK_ERROR(mds_update_paged_epoch(wal, mds_durable_epoch(wal)));
-      
+    
     /* And now retry allocating a buffer. It shall work */
     ret = mds_bufmgr_alloc_page(bufmgr, file, page_no, &buffer);
   }
@@ -1315,4 +1313,63 @@ nvwal_error_t mds_read_one_epoch(
   *out = *mds_iterator.epoch_metadata_;
   NVWAL_CHECK_ERROR(mds_epoch_iterator_destroy(&mds_iterator));
   return 0;
+}
+
+
+nvwal_error_t mds_read_latest_epoch(
+  struct NvwalContext* wal,
+  uint64_t metadata,
+  struct MdsEpochMetadata* out) 
+{
+  struct NvwalMdsContext* mds = &(wal->mds_);
+  nvwal_epoch_t latest_epoch = nvwal_atomic_load(&mds->latest_epoch_);
+  
+  return mds_read_one_epoch(wal, latest_epoch, out);
+}
+
+nvwal_error_t mds_find_metadata_mnge(
+  struct NvwalContext* wal,
+  uint64_t query_metadata,
+  struct MdsEpochMetadata* out)
+{
+  struct MdsEpochMetadata em;
+  nvwal_epoch_t low = kNvwalInvalidEpoch;
+  nvwal_epoch_t high = kNvwalInvalidEpoch;
+  nvwal_epoch_t le = mds_latest_epoch(wal);
+  nvwal_epoch_t lpe = mds_paged_epoch(wal);
+
+  /* 
+   * Check if the epoch we are looking for is paged out so
+   * that we only go out to the disk if we really have to. 
+   */
+  int on_disk = 0;
+  if (lpe != kNvwalInvalidEpoch) {
+    NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, lpe, &em));
+    if (query_metadata <= em.user_metadata_) {
+        on_disk = 1;
+    }
+  }
+  if (on_disk) {
+    low = kNvwalInvalidEpoch;
+    high = lpe;
+  } else {
+    low = lpe+1;
+    high = le;
+  }
+
+  /* Now, do binary search in the remaining epoch range */
+  int found = 0;
+  while (low <= high) {
+    nvwal_epoch_t md = (low + high) / 2;
+    NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, md, &em));
+    if (em.user_metadata_ >= query_metadata) {
+      high = md - 1;
+      *out = em;
+      found = 1;
+    } else {
+      low = md + 1;
+    } 
+  }
+  
+  return found? 0: 1;
 }

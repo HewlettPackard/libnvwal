@@ -106,4 +106,4 @@ add_nvwal_test_individual(test_nvwal_util "EpochIncrement;CircularMemcpy;Circula
 
 add_nvwal_test_individual(test_nvwal_writer "OneEpoch;TwoEpochs;ManyEpochsBufferWrapAround;TwoWritersSingleThread;TwoWritersConcurrent")
 
-
+add_nvwal_test_individual(test_nvwal_tag "OneEpoch;MultipleEpochs")

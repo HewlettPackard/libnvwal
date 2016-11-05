@@ -199,6 +199,38 @@ nvwal_error_t nvwal_on_wal_write(
   return 0;
 }
 
+nvwal_error_t nvwal_tag_epoch(
+  struct NvwalWriterContext* writer,
+  nvwal_epoch_t target_epoch,
+  uint64_t metadata)
+{
+  struct NvwalContext* const wal = writer->parent_;
+
+  /**
+   * First, we need to figure out what is the frame of the writer
+   * we should write epoch metadata at.
+   */
+  int frame_index;
+  for (frame_index = 0; frame_index < kNvwalEpochFrameCount; ++frame_index) {
+    struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
+    nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
+    if (frame_epoch == target_epoch) {
+      break;
+    }
+  }
+  if (frame_index == kNvwalEpochFrameCount) {
+    return 0;  /** No frame in target epoch. Probably an idle writer */
+  }
+
+  struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
+  const nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
+  assert(target_epoch == frame_epoch);
+ 
+  nvwal_atomic_store_release(&frame->user_metadata_, metadata);
+
+  return 0;
+}
+
 uint8_t nvwal_has_enough_writer_space(
   struct NvwalWriterContext* writer) {
   /*
@@ -363,6 +395,7 @@ nvwal_error_t flusher_conclude_stable_epoch(
   const struct NvwalLogSegment* cur_segment = flusher_get_cur_segment(wal);
   new_meta.to_seg_id_ = cur_segment->dsid_;
   new_meta.to_off_ = cur_segment->written_bytes_;
+  new_meta.user_metadata_ = wal->flusher_current_epoch_user_metadata_;
 
   /*
    * Individual copies to NV-segments were just usual memcpy without drain/persist.
@@ -483,6 +516,17 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
   struct NvwalWriterEpochFrame* frame = writer->epoch_frames_ + frame_index;
   const nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
   assert(target_epoch == frame_epoch);
+
+  /* 
+   * Copy user tagged metadata only if this is a stable epoch.
+   * In case multiple writers tag the same epoch, then last non-zero writer wins. 
+   */
+  if (is_stable_epoch) {
+    uint64_t user_metadata = nvwal_atomic_load_acquire(&frame->user_metadata_);
+    wal->flusher_current_epoch_user_metadata_ = 
+        (user_metadata != 0) ? user_metadata: wal->flusher_current_epoch_user_metadata_;
+  }
+
   const uint64_t segment_size = wal->config_.segment_size_;
   const uint64_t writer_buffer_size = wal->config_.writer_buffer_size_;
   while (1) {  /** Until we write out all logs in this frame */

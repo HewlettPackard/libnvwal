@@ -145,6 +145,15 @@ nvwal_error_t mds_rollback_to_epoch(
   struct NvwalContext* wal,
   nvwal_epoch_t epoch);
 
+/**
+ * Find the epoch with the minimum user-defined metadata that is greater 
+ * than or equal to a given metadata query value.
+ */
+nvwal_error_t mds_find_metadata_mnge(
+  struct NvwalContext* wal,
+  uint64_t query_metadata,
+  struct MdsEpochMetadata* out);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

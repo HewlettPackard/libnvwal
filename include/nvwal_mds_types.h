@@ -39,11 +39,12 @@
 struct MdsEpochMetadata {
   union {
     struct {
-      nvwal_epoch_t epoch_id_;           /**< epoch identifier */
+      nvwal_epoch_t epoch_id_;        /**< epoch identifier */
       nvwal_dsid_t  from_seg_id_;
       uint32_t      from_offset_; 
       nvwal_dsid_t  to_seg_id_;
       uint32_t      to_off_;
+      uint64_t      user_metadata_; /**< user defined metadata */
     };
     uint64_t        u64_[8];
   };
