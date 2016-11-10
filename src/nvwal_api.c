@@ -57,6 +57,32 @@ nvwal_error_t nvwal_query_durable_epoch(
   return 0;
 }
 
+nvwal_epoch_t nvwal_query_epoch_lower_bound(
+  struct NvwalContext* wal,
+  uint64_t query_metadata)
+{
+  struct MdsEpochMetadata out;
+  if (mds_find_metadata_lower_bound(wal, query_metadata, &out)) {
+    return kNvwalInvalidEpoch;
+  }
+  return out.epoch_id_;
+}
+
+nvwal_error_t nvwal_epoch_metadata(
+  struct NvwalContext* wal,
+  nvwal_epoch_t epoch, 
+  uint64_t* user_metadata)
+{
+  nvwal_error_t ret;
+  struct MdsEpochMetadata out;
+  if (ret = mds_read_one_epoch(wal, epoch, &out)) {
+    return ret;
+  }
+  *user_metadata = out.user_metadata_;
+  return 0;
+}
+
+
 nvwal_error_t nvwal_advance_stable_epoch(
   struct NvwalContext* wal,
   nvwal_epoch_t new_stable_epoch) {
@@ -426,6 +452,7 @@ nvwal_error_t flusher_conclude_stable_epoch(
       to_offset - from_offset);
   }
 
+  printf("metadata: %lu -- %lu\n", new_meta.from_offset_, new_meta.to_off_);
   const nvwal_error_t mds_ret = mds_write_epoch(wal, &new_meta);
   if (mds_ret) {
     return mds_ret;
