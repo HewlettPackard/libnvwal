@@ -39,9 +39,6 @@
 
 namespace nvwaltest {
 
-  const uint32_t kBytes = 64;
-
-
 void tag_and_persist_epoch(
   TestContext& context,
   nvwal_epoch_t epoch_id, uint64_t epoch_size, uint64_t metadata)
@@ -67,7 +64,7 @@ nvwal_error_t find_epoch(
   auto* resource = context.get_resource(0);
   auto* wal = &resource->wal_instance_;
   
-  return mds_find_metadata_mnge(wal, metadata, out);
+  return mds_find_metadata_lower_bound(wal, metadata, out);
 }
 
 TEST(NvwalTagTest, OneEpoch) {

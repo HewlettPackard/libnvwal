@@ -383,6 +383,15 @@ static inline nvwal_epoch_t nvwal_cursor_get_current_epoch(
   return cursor->current_epoch_;
 }
 
+/**
+ * Find the first epoch tagged with user-defined metadata that is greater 
+ * than or equal to a given metadata query value.
+ */
+nvwal_epoch_t mds_find_metadata_lower_bound(
+  struct NvwalContext* wal,
+  uint64_t query_metadata);
+
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

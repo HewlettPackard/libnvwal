@@ -1327,7 +1327,7 @@ nvwal_error_t mds_read_latest_epoch(
   return mds_read_one_epoch(wal, latest_epoch, out);
 }
 
-nvwal_error_t mds_find_metadata_mnge(
+nvwal_error_t mds_find_metadata_lower_bound(
   struct NvwalContext* wal,
   uint64_t query_metadata,
   struct MdsEpochMetadata* out)
