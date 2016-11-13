@@ -533,7 +533,7 @@ nvwal_error_t impl_init_no_error_handling(
       &durable_epoch_meta));
     wal->flusher_current_nv_segment_dsid_ = durable_epoch_meta.to_seg_id_;
     wal->flusher_current_epoch_head_dsid_ = durable_epoch_meta.from_seg_id_;
-    wal->flusher_current_epoch_head_offset_ = durable_epoch_meta.from_offset_;
+    wal->flusher_current_epoch_head_offset_ = durable_epoch_meta.to_off_;
   }
 
   /* Initialize the reader context */
