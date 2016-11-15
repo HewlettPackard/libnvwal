@@ -44,7 +44,8 @@ struct MdsEpochMetadata {
       uint32_t      from_offset_; 
       nvwal_dsid_t  to_seg_id_;
       uint32_t      to_off_;
-      uint64_t      user_metadata_; /**< user defined metadata */
+      uint64_t      user_metadata_0_; /**< user defined metadata word 0 */
+      uint64_t      user_metadata_1_; /**< user defined metadata word 1 */
     };
     uint64_t        u64_[8];
   };

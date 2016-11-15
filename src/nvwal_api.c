@@ -71,14 +71,16 @@ nvwal_epoch_t nvwal_query_epoch_lower_bound(
 nvwal_error_t nvwal_epoch_metadata(
   struct NvwalContext* wal,
   nvwal_epoch_t epoch, 
-  uint64_t* user_metadata)
+  uint64_t* user_metadata_0,
+  uint64_t* user_metadata_1)
 {
   nvwal_error_t ret;
   struct MdsEpochMetadata out;
   if (ret = mds_read_one_epoch(wal, epoch, &out)) {
     return ret;
   }
-  *user_metadata = out.user_metadata_;
+  *user_metadata_0 = out.user_metadata_0_;
+  *user_metadata_1 = out.user_metadata_1_;
   return 0;
 }
 
@@ -228,7 +230,8 @@ nvwal_error_t nvwal_on_wal_write(
 nvwal_error_t nvwal_tag_epoch(
   struct NvwalWriterContext* writer,
   nvwal_epoch_t target_epoch,
-  uint64_t metadata)
+  uint64_t user_metadata_0,
+  uint64_t user_metadata_1)
 {
   struct NvwalContext* const wal = writer->parent_;
 
@@ -252,7 +255,8 @@ nvwal_error_t nvwal_tag_epoch(
   const nvwal_epoch_t frame_epoch = nvwal_atomic_load_acquire(&frame->log_epoch_);
   assert(target_epoch == frame_epoch);
  
-  nvwal_atomic_store_release(&frame->user_metadata_, metadata);
+  nvwal_atomic_store_release(&frame->user_metadata_0_, user_metadata_0);
+  nvwal_atomic_store_release(&frame->user_metadata_1_, user_metadata_1);
 
   return 0;
 }
@@ -421,7 +425,8 @@ nvwal_error_t flusher_conclude_stable_epoch(
   const struct NvwalLogSegment* cur_segment = flusher_get_cur_segment(wal);
   new_meta.to_seg_id_ = cur_segment->dsid_;
   new_meta.to_off_ = cur_segment->written_bytes_;
-  new_meta.user_metadata_ = wal->flusher_current_epoch_user_metadata_;
+  new_meta.user_metadata_0_ = wal->flusher_current_epoch_user_metadata_0_;
+  new_meta.user_metadata_1_ = wal->flusher_current_epoch_user_metadata_1_;
 
   /*
    * Individual copies to NV-segments were just usual memcpy without drain/persist.
@@ -549,9 +554,12 @@ nvwal_error_t flusher_copy_one_writer_to_nv(
    * In case multiple writers tag the same epoch, then last non-zero writer wins. 
    */
   if (is_stable_epoch) {
-    uint64_t user_metadata = nvwal_atomic_load_acquire(&frame->user_metadata_);
-    wal->flusher_current_epoch_user_metadata_ = 
-        (user_metadata != 0) ? user_metadata: wal->flusher_current_epoch_user_metadata_;
+    uint64_t user_metadata_0 = nvwal_atomic_load_acquire(&frame->user_metadata_0_);
+    uint64_t user_metadata_1 = nvwal_atomic_load_acquire(&frame->user_metadata_1_);
+    wal->flusher_current_epoch_user_metadata_0_ = 
+        (user_metadata_0 != 0) ? user_metadata_0: wal->flusher_current_epoch_user_metadata_0_;
+    wal->flusher_current_epoch_user_metadata_1_ = 
+        (user_metadata_1 != 0) ? user_metadata_1: wal->flusher_current_epoch_user_metadata_1_;
   }
 
   const uint64_t segment_size = wal->config_.segment_size_;

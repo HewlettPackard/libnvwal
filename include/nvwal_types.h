@@ -562,7 +562,8 @@ struct NvwalWriterEpochFrame {
   /**
    * User metadata associated with this epoch.
    */
-  uint64_t user_metadata_;
+  uint64_t user_metadata_0_;
+  uint64_t user_metadata_1_;
 };
 
 /**
@@ -969,7 +970,8 @@ struct NvwalContext {
   /**
    * User defined metadata associated with currently flushed epoch.
    */
-  uint64_t flusher_current_epoch_user_metadata_;
+  uint64_t flusher_current_epoch_user_metadata_0_;
+  uint64_t flusher_current_epoch_user_metadata_1_;
 
 
   struct NvwalWriterContext writers_[kNvwalMaxWorkers];

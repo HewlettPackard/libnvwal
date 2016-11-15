@@ -53,7 +53,7 @@ void tag_and_persist_epoch(
   std::memset(buffer+offset, 0xFF & metadata, epoch_size);
   EXPECT_EQ(1U, nvwal_has_enough_writer_space(writer));
   EXPECT_EQ(0, nvwal_on_wal_write(writer, epoch_size, epoch_id));
-  EXPECT_EQ(0, nvwal_tag_epoch(writer, epoch_id, metadata));
+  EXPECT_EQ(0, nvwal_tag_epoch(writer, epoch_id, 0, metadata));
   EXPECT_EQ(0, nvwal_advance_stable_epoch(wal, epoch_id));
   EXPECT_EQ(0, context.wait_until_durable(wal, epoch_id));
 } 
@@ -81,7 +81,7 @@ TEST(NvwalTagTest, OneEpoch) {
   EXPECT_EQ(0, find_epoch(context, 23, &em));
 
   EXPECT_EQ(1,em.epoch_id_);
-  EXPECT_EQ(24, em.user_metadata_);
+  EXPECT_EQ(24, em.user_metadata_1_);
 
   EXPECT_EQ(0, context.uninit_all());
 }
@@ -106,7 +106,7 @@ TEST(NvwalTagTest, MultipleEpochs) {
     uint64_t query_metadata = e*10;
     EXPECT_EQ(0, find_epoch(context, query_metadata, &em));
     EXPECT_EQ(e, em.epoch_id_);
-    EXPECT_EQ(query_metadata, em.user_metadata_);
+    EXPECT_EQ(query_metadata, em.user_metadata_1_);
     EXPECT_EQ(((e-1)*kBytes) / wal->config_.segment_size_ + 1, em.from_seg_id_);
     EXPECT_EQ(((e-1)*kBytes) % wal->config_.segment_size_, em.from_offset_);
   }

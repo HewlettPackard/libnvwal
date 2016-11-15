@@ -187,7 +187,8 @@ nvwal_error_t nvwal_on_wal_write(
  * @brief Assigns user defined metadata to a given epoch.
  * @param[in] writer the writer that represents the calling thread itself
  * @param[in] log_epoch epoch to assign metadata to
- * @param[in] metadata user define metadata
+ * @param[in] user_metadata_0 user defined metadata word 0
+ * @param[in] user_metadata_1 user defined metadata word 1
  * Same constraints and invariants apply as nvwal_on_wal_write.
  * Overwrites any previously assigned metadata, and assigned metadata 
  * becomes durable when epoch becomes durable.
@@ -197,7 +198,8 @@ nvwal_error_t nvwal_on_wal_write(
 nvwal_error_t nvwal_tag_epoch(
   struct NvwalWriterContext* writer,
   nvwal_epoch_t log_epoch,
-  uint64_t metadata);
+  uint64_t user_metadata_0,
+  uint64_t user_metadata_1);
 
 /**
  * @returns.Whether the writer has plenty of space left in the buffer.
@@ -384,7 +386,7 @@ static inline nvwal_epoch_t nvwal_cursor_get_current_epoch(
 }
 
 /**
- * @brief Find the first epoch tagged with user-defined metadata that is 
+ * @brief Find the first epoch tagged with user-defined metadata (word 1) that is 
  * greater than or equal to a given metadata query value.
  * @param[in] wal WAL stream to query
  */
@@ -396,12 +398,14 @@ nvwal_epoch_t nvwal_query_epoch_lower_bound(
  * @brief Return the user-defined metadata associated with a given epoch.
  * @param[in] wal WAL stream to query
  * @param[in] epoch the epoch to return metadata for
- * @param[out] user_metadata the returned metadata
+ * @param[out] user_metadata_0 the returned metadata word 0
+ * @param[out] user_metadata_1 the returned metadata word 1
  */
 nvwal_error_t nvwal_epoch_metadata(
   struct NvwalContext* wal,
   nvwal_epoch_t epoch,
-  uint64_t* user_metadata);
+  uint64_t* user_metadata_0,
+  uint64_t* user_metadata_1);
 
 
 #ifdef __cplusplus

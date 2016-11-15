@@ -1345,7 +1345,7 @@ nvwal_error_t mds_find_metadata_lower_bound(
   int on_disk = 0;
   if (lpe != kNvwalInvalidEpoch) {
     NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, lpe, &em));
-    if (query_metadata <= em.user_metadata_) {
+    if (query_metadata <= em.user_metadata_1_) {
         on_disk = 1;
     }
   }
@@ -1362,7 +1362,7 @@ nvwal_error_t mds_find_metadata_lower_bound(
   while (low <= high) {
     nvwal_epoch_t md = (low + high) / 2;
     NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, md, &em));
-    if (em.user_metadata_ >= query_metadata) {
+    if (em.user_metadata_1_ >= query_metadata) {
       high = md - 1;
       *out = em;
       found = 1;
