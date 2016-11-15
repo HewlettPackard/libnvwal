@@ -314,4 +314,13 @@ void nvwal_circular_dest_memcpy(
     memcpy(circular_dest_base + circular_dest_cur_offset, src, bytes_to_copy);
 }
 
-
+void hexdump(nvwal_byte_t* buf, uint64_t len)
+{
+    for (uint64_t i = 0; i < len; i+=16) {
+        printf("%08lx ", i);
+        for (uint64_t j=0; j < 16; j+=2) {
+            printf("%02x %02x ", (short int) buf[i+j+1], (short int) buf[i+j]);
+        }
+        printf("\n");
+    }
+}
