@@ -41,7 +41,7 @@ namespace nvwaltest {
 
 void tag_and_persist_epoch(
   TestContext& context,
-  nvwal_epoch_t epoch_id, uint64_t epoch_size, uint64_t metadata)
+  nvwal_epoch_t epoch_id, uint64_t epoch_size, uint64_t start_lsn, uint64_t end_lsn)
 {
   auto* resource = context.get_resource(0);
   auto* wal = &resource->wal_instance_;
@@ -50,42 +50,112 @@ void tag_and_persist_epoch(
   auto* writer = wal->writers_ + 0;
 
   const uint32_t offset = ((epoch_id-1) * epoch_size) % buffer_size;
-  std::memset(buffer+offset, 0xFF & metadata, epoch_size);
+  std::memset(buffer+offset, 0, epoch_size);
   EXPECT_EQ(1U, nvwal_has_enough_writer_space(writer));
   EXPECT_EQ(0, nvwal_on_wal_write(writer, epoch_size, epoch_id));
-  EXPECT_EQ(0, nvwal_tag_epoch(writer, epoch_id, 0, metadata));
+  EXPECT_EQ(0, nvwal_tag_epoch(writer, epoch_id, start_lsn, end_lsn));
   EXPECT_EQ(0, nvwal_advance_stable_epoch(wal, epoch_id));
   EXPECT_EQ(0, context.wait_until_durable(wal, epoch_id));
 } 
 
-nvwal_error_t find_epoch(
-  TestContext& context, uint64_t metadata, struct MdsEpochMetadata* out)
+int compare_ge(struct NvwalPredicateClosure* predicate, uint64_t arg) 
+{
+  uint64_t val = (uint64_t) predicate->state_;
+  return arg >= val;  
+}
+
+int compare_le(struct NvwalPredicateClosure* predicate, uint64_t arg) 
+{
+  uint64_t val = (uint64_t) predicate->state_;
+  return arg <= val;  
+}
+
+nvwal_epoch_t query_epoch_lower_bound_ge(TestContext& context, uint64_t val, int metadata_id)
+{
+  auto* resource = context.get_resource(0);
+  auto* wal = &resource->wal_instance_;
+
+  struct NvwalPredicateClosure predicate = {compare_ge, (void*) val};  
+
+  return nvwal_query_epoch_lower_bound(wal, metadata_id, &predicate);
+}
+
+nvwal_epoch_t query_epoch_range_begin(TestContext& context, uint64_t start_lsn, uint64_t end_lsn)
 {
   auto* resource = context.get_resource(0);
   auto* wal = &resource->wal_instance_;
   
-  return mds_find_metadata_lower_bound(wal, metadata, out);
+  struct NvwalPredicateClosure predicate = {compare_le, (void*) start_lsn};  
+
+  return nvwal_query_epoch_upper_bound(wal, 0, &predicate);
 }
 
-TEST(NvwalTagTest, OneEpoch) {
+nvwal_epoch_t query_epoch_range_end(TestContext& context, uint64_t start_lsn, uint64_t end_lsn)
+{
+  auto* resource = context.get_resource(0);
+  auto* wal = &resource->wal_instance_;
+  
+  struct NvwalPredicateClosure predicate = {compare_ge, (void*) end_lsn};
+
+  return nvwal_query_epoch_lower_bound(wal, 1, &predicate);
+}
+
+
+TEST(NvwalTagTest, OneEpoch) 
+{
   TestContext context(1);
   EXPECT_EQ(0, context.init_all());
 
-  const uint32_t kBytes = 64;
+  const uint64_t epoch_size = 64;
 
-  tag_and_persist_epoch(context, 1, kBytes, 24);
+  tag_and_persist_epoch(context, 1, epoch_size, 0, epoch_size);
  
   MdsEpochMetadata em;
 
-  EXPECT_NE(0, find_epoch(context, 42, &em));
-  EXPECT_EQ(0, find_epoch(context, 23, &em));
-
-  EXPECT_EQ(1,em.epoch_id_);
-  EXPECT_EQ(24, em.user_metadata_1_);
+  EXPECT_EQ(1, query_epoch_lower_bound_ge(context, 0, 1));
 
   EXPECT_EQ(0, context.uninit_all());
 }
 
+TEST(NvwalTagTest, ThreeEpochs) 
+{
+  TestContext context(1);
+  EXPECT_EQ(0, context.init_all());
+
+  const uint64_t epoch_size = 64;
+
+  tag_and_persist_epoch(context, 1, epoch_size, 0, epoch_size);
+  tag_and_persist_epoch(context, 2, epoch_size, epoch_size, 2*epoch_size);
+  tag_and_persist_epoch(context, 3, epoch_size, 2*epoch_size, 3*epoch_size);
+ 
+  MdsEpochMetadata em;
+
+  EXPECT_EQ(1, query_epoch_range_begin(context, 0, epoch_size));
+  EXPECT_EQ(1, query_epoch_range_end(context, 0, epoch_size));
+
+  EXPECT_EQ(1, query_epoch_range_begin(context, 0, epoch_size-1));
+  EXPECT_EQ(1, query_epoch_range_end(context, 0, epoch_size-1));
+
+  EXPECT_EQ(2, query_epoch_range_begin(context, epoch_size, epoch_size*2));
+  EXPECT_EQ(2, query_epoch_range_end(context, epoch_size, epoch_size*2));
+
+  EXPECT_EQ(2, query_epoch_range_begin(context, epoch_size+1, epoch_size*2));
+  EXPECT_EQ(2, query_epoch_range_end(context, epoch_size+1, epoch_size*2));
+
+  EXPECT_EQ(1, query_epoch_range_begin(context, epoch_size-1, epoch_size*2));
+  EXPECT_EQ(2, query_epoch_range_end(context, epoch_size-1, epoch_size*2));
+
+  EXPECT_EQ(1, query_epoch_range_begin(context, epoch_size-1, epoch_size*2-1));
+  EXPECT_EQ(2, query_epoch_range_end(context, epoch_size-1, epoch_size*2-1));
+
+  EXPECT_EQ(1, query_epoch_range_begin(context, epoch_size-1, epoch_size*2+1));
+  EXPECT_EQ(3, query_epoch_range_end(context, epoch_size-1, epoch_size*2+1));
+
+  EXPECT_EQ(0, context.uninit_all());
+}
+
+
+#if 0
 TEST(NvwalTagTest, MultipleEpochs) {
   TestContext context(1);
   EXPECT_EQ(0, context.init_all());
@@ -113,8 +183,8 @@ TEST(NvwalTagTest, MultipleEpochs) {
 
   EXPECT_EQ(0, context.uninit_all());
 }
-
+#endif
 
 }  // namespace nvwaltest
 
-TEST_MAIN_CAPTURE_SIGNALS(NvwalWriterTest);
+TEST_MAIN_CAPTURE_SIGNALS(NvwalTagTest);

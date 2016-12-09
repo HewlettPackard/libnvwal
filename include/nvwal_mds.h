@@ -146,13 +146,25 @@ nvwal_error_t mds_rollback_to_epoch(
   nvwal_epoch_t epoch);
 
 /**
- * Find the first epoch tagged with user-defined metadata that is greater 
- * than or equal to a given metadata query value.
+ * Find the lowest epoch tagged with user-defined metadata for which 
+ * the given predicate is true.
  */
 nvwal_error_t mds_find_metadata_lower_bound(
   struct NvwalContext* wal,
-  uint64_t query_metadata,
+  int user_metadata_id,
+  struct NvwalPredicateClosure* predicate,
   struct MdsEpochMetadata* out);
+
+/**
+ * Find the greatest epoch tagged with user-defined metadata for which
+ * the given predicate is true.
+ */
+nvwal_error_t mds_find_metadata_upper_bound(
+  struct NvwalContext* wal,
+  int user_metadata_id,
+  struct NvwalPredicateClosure* predicate,
+  struct MdsEpochMetadata* out);
+
 
 #ifdef __cplusplus
 }

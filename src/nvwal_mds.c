@@ -1327,47 +1327,71 @@ nvwal_error_t mds_read_latest_epoch(
   return mds_read_one_epoch(wal, latest_epoch, out);
 }
 
+static uint64_t user_metadata(struct MdsEpochMetadata em, int user_metadata_id)
+{
+    switch(user_metadata_id) {
+        case 0:
+            return em.user_metadata_0_;
+        case 1:
+            return em.user_metadata_1_;
+        default:
+            return em.user_metadata_0_;
+    }
+}
+
 nvwal_error_t mds_find_metadata_lower_bound(
   struct NvwalContext* wal,
-  uint64_t query_metadata,
+  int user_metadata_id,
+  struct NvwalPredicateClosure* predicate,
   struct MdsEpochMetadata* out)
 {
   struct MdsEpochMetadata em;
-  nvwal_epoch_t low = kNvwalInvalidEpoch;
-  nvwal_epoch_t high = kNvwalInvalidEpoch;
   nvwal_epoch_t le = mds_latest_epoch(wal);
-  nvwal_epoch_t lpe = mds_paged_epoch(wal);
-
-  /* 
-   * Check if the epoch we are looking for is paged out so
-   * that we only go out to the disk if we really have to. 
-   */
-  int on_disk = 0;
-  if (lpe != kNvwalInvalidEpoch) {
-    NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, lpe, &em));
-    if (query_metadata <= em.user_metadata_1_) {
-        on_disk = 1;
-    }
-  }
-  if (on_disk) {
-    low = kNvwalInvalidEpoch;
-    high = lpe;
-  } else {
-    low = lpe+1;
-    high = le;
-  }
+  nvwal_epoch_t low = kNvwalInvalidEpoch+1;
+  nvwal_epoch_t high = le;
 
   /* Now, do binary search in the remaining epoch range */
   int found = 0;
   while (low <= high) {
     nvwal_epoch_t md = (low + high) / 2;
     NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, md, &em));
-    if (em.user_metadata_1_ >= query_metadata) {
+    //printf("low == %lu high == %lu md == %lu metadata == %lu\n", low, high, md, user_metadata(em, user_metadata_id));
+    if (predicate->method_(predicate, user_metadata(em, user_metadata_id))) {
+//    if (user_metadata(em, user_metadata_id) >= query_val) {
       high = md - 1;
       *out = em;
       found = 1;
     } else {
       low = md + 1;
+    } 
+  }
+  
+  return found? 0: 1;
+}
+
+
+nvwal_error_t mds_find_metadata_upper_bound(
+  struct NvwalContext* wal,
+  int user_metadata_id,
+  struct NvwalPredicateClosure* predicate,
+  struct MdsEpochMetadata* out)
+{
+  struct MdsEpochMetadata em;
+  nvwal_epoch_t le = mds_latest_epoch(wal);
+  nvwal_epoch_t low = kNvwalInvalidEpoch+1;
+  nvwal_epoch_t high = le;
+
+  /* Now, do binary search in the remaining epoch range */
+  int found = 0;
+  while (low <= high) {
+    nvwal_epoch_t md = (low + high) / 2;
+    NVWAL_CHECK_ERROR(mds_read_one_epoch(wal, md, &em));
+    if (predicate->method_(predicate, user_metadata(em, user_metadata_id))) {
+      low = md + 1;
+      *out = em;
+      found = 1;
+    } else {
+      high = md - 1;
     } 
   }
   

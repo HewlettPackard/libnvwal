@@ -995,6 +995,16 @@ struct NvwalContext {
 
 };
 
+/*
+ * A predicate closure, which includes a function pointer to the method
+ * implementing the predicate, and pointer to closure state for use by
+ * the predicate method.
+ */ 
+struct NvwalPredicateClosure {
+  int (*method_)(struct NvwalPredicateClosure* predicate, uint64_t arg);
+  void* state_;
+};
+
 /** @} */
 
 #endif  /* NVWAL_TYPES_H_ */

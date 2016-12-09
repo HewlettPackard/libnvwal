@@ -386,13 +386,28 @@ static inline nvwal_epoch_t nvwal_cursor_get_current_epoch(
 }
 
 /**
- * @brief Find the first epoch tagged with user-defined metadata (word 1) that is 
- * greater than or equal to a given metadata query value.
+ * @brief Find the lowest epoch tagged with user-defined metadata for which 
+ * the given predicate is true.
  * @param[in] wal WAL stream to query
+ * @param[in] user_metadata_id metadata identifier to query
+ * @param[in] predicate 
  */
 nvwal_epoch_t nvwal_query_epoch_lower_bound(
   struct NvwalContext* wal,
-  uint64_t query_metadata);
+  int user_metadata_id,
+  struct NvwalPredicateClosure* predicate);
+
+/**
+ * @brief Find the greatest epoch tagged with user-defined metadata for which 
+ * the given predicate is true.
+ * @param[in] wal WAL stream to query
+ * @param[in] user_metadata_id metadata identifier to query
+ * @param[in] predicate 
+ */
+nvwal_epoch_t nvwal_query_epoch_upper_bound(
+  struct NvwalContext* wal,
+  int user_metadata_id,
+  struct NvwalPredicateClosure* predicate);
 
 /**
  * @brief Return the user-defined metadata associated with a given epoch.
