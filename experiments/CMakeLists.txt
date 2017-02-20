@@ -50,5 +50,8 @@ set(UBENCH_DEPENDENCIES
 add_executable(lsn_microbench ${CMAKE_CURRENT_SOURCE_DIR}/lsn_microbench.cpp)
 target_link_libraries(lsn_microbench ${UBENCH_DEPENDENCIES})
 
+add_executable(epoch_microbench ${CMAKE_CURRENT_SOURCE_DIR}/epoch_microbench.cpp)
+target_link_libraries(epoch_microbench ${UBENCH_DEPENDENCIES})
+
 add_executable(memcpy_bench ${CMAKE_CURRENT_SOURCE_DIR}/memcpy_bench.cpp)
 target_link_libraries(memcpy_bench ${UBENCH_DEPENDENCIES})
