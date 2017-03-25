@@ -73,11 +73,3 @@ Go to build folder, and type:
 
     make dox
     google-chrome dox/html/group__LIBNVWAL.html
-
-Project Milestones
---------
-* Phase 1 (~Aug’16): Design discussions.
-* Phase 2 (~Sep’16): Feature implementation.
-* Phase 3 (~Nov’16): Performance benchmark/tuning and demonstration at Discover.
-* Phase 4 (Dec’16~): User support and bug fixes.
-
